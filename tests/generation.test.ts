@@ -16,6 +16,7 @@ const validBrief: BusinessBrief = {
 const validContent = {
   headline: "A calmer home starts with the little things.",
   subheadline: "Thoughtful home essentials for design lovers who want everyday pieces with a lighter footprint.",
+  features: ["Thoughtfully selected everyday essentials", "Made to bring a little more ease"],
 };
 
 describe("runtime schemas", () => {
@@ -64,5 +65,20 @@ describe("generateLandingPage", () => {
       if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previousKey;
     }
+  });
+});
+
+describe("regeneratePageSection", () => {
+  it("validates section output from an injected provider", async () => {
+    const { regeneratePageSection } = await import("@/lib/ai/generate-page");
+    await expect(regeneratePageSection(validBrief, "headline", async () => ({ headline: "A more considered home begins here." })))
+      .resolves.toEqual({ headline: "A more considered home begins here." });
+  });
+
+  it("rejects invalid section output and safely maps provider errors", async () => {
+    const { regeneratePageSection } = await import("@/lib/ai/generate-page");
+    await expect(regeneratePageSection(validBrief, "features", async () => ({ features: ["tiny", "brief"] }))).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
+    await expect(regeneratePageSection(validBrief, "headline", async () => { throw new Error("private detail"); }))
+      .rejects.toMatchObject({ code: "PROVIDER", message: expect.not.stringContaining("private detail") });
   });
 });

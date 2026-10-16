@@ -11,7 +11,7 @@ export type EvaluationCase = {
 const caseFor = (name: string, brief: BusinessBrief, headline: string, subheadline: string, expectedTerms: string[]): EvaluationCase => ({
   name,
   brief,
-  output: { ...brief, headline, subheadline, layout: "editorial" },
+  output: { ...brief, headline, subheadline, features: ["Thoughtfully made for everyday use", "A considered choice for your home"], layout: "editorial" },
   expectedTerms,
 });
 
@@ -26,10 +26,10 @@ const CLAIM_PATTERN = /\b\d+(?:\.\d+)?\s?(?:%|percent|years?|students?|customers
 
 export function evaluatePage(caseItem: EvaluationCase) {
   const parsed = GeneratedPageSchema.safeParse(caseItem.output);
-  const content = `${caseItem.output.headline} ${caseItem.output.subheadline}`.toLowerCase();
+  const content = `${caseItem.output.headline} ${caseItem.output.subheadline} ${caseItem.output.features.join(" ")}`.toLowerCase();
   return {
     schemaValid: parsed.success,
-    hasRequiredSections: Boolean(caseItem.output.headline.trim() && caseItem.output.subheadline.trim()),
+    hasRequiredSections: Boolean(caseItem.output.headline.trim() && caseItem.output.subheadline.trim() && caseItem.output.features.length >= 2 && caseItem.output.features.length <= 4),
     reflectsBrief: caseItem.expectedTerms.some((term) => content.includes(term.toLowerCase())),
     hasCallToAction: Boolean(caseItem.output.callToAction.trim()),
     claimFlaggedForReview: CLAIM_PATTERN.test(content),

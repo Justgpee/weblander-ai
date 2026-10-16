@@ -8,6 +8,7 @@ export function generateSamplePage(brief: BusinessBrief, layout: GeneratedPage["
     offering: offer,
     headline: layout === "editorial" ? `${offer}, made for what’s next.` : `Meet your new favorite ${offer.toLowerCase()}.`,
     subheadline: brief.description.trim(),
+    features: ["Thoughtfully selected everyday essentials", "Made to bring a little more ease"],
     layout,
   };
 }
