@@ -57,7 +57,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
-        <a className="brand" href="#workspace" aria-label="Launchpad AI home"><span className="brand-mark">L</span><span>launchpad<span className="brand-ai">.ai</span></span></a>
+        <a className="brand" href="#workspace" aria-label="WebLander AI home"><span className="brand-mark">W</span><span>WebLander AI</span></a>
         <div className="workspace-label">WORKSPACE</div>
         <a className="nav-item active" href="#workspace"><span className="nav-icon">✳</span> Website studio</a>
         <a className="nav-item muted" href="#projects"><span className="nav-icon">▤</span> My projects <span className="soon">SOON</span></a>
@@ -74,7 +74,7 @@ export default function Home() {
             <WebsitePreview page={page} layout={layout} onLayoutChange={changeLayout} loading={loading} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
-          <footer className="page-footer"><span>© 2025 Launchpad AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>
+          <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>
         </div>
       </section>
     </main>
