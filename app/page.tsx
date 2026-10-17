@@ -7,6 +7,7 @@ import { WebsitePreview } from "@/components/website-preview";
 import { mergeGeneratedSectionIfUnchanged } from "@/lib/page-editing";
 import { ProjectManager } from "@/components/project-manager";
 import { UnsavedChangesDialog } from "@/components/unsaved-changes-dialog";
+import { ExportDialog } from "@/components/export-dialog";
 import { requestProjectTransition, resolveProjectTransition, type ProjectTransition } from "@/lib/project-transition";
 import {
   ProjectStorageError,
@@ -16,6 +17,7 @@ import {
   type ProjectRecord,
   type ProjectStorage,
 } from "@/lib/projects";
+import { createWebsiteExport } from "@/lib/website-export";
 
 type SectionState = Record<EditableSection, { loading: boolean; error: string }>;
 const EMPTY_SECTION_STATE: SectionState = {
@@ -42,6 +44,7 @@ export default function Home() {
   const [projectStorageError, setProjectStorageError] = useState("");
   const [projectsUnavailable, setProjectsUnavailable] = useState(false);
   const [projectManagerOpen, setProjectManagerOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingTransition, setPendingTransition] = useState<ProjectTransition | null>(null);
   const pendingTransitionRef = useRef<ProjectTransition | null>(null);
   const projectStorageRef = useRef<ProjectStorage | null>(null);
@@ -277,6 +280,21 @@ export default function Home() {
     requestTransition({ type: "open", id });
   }
 
+  function downloadWebsite(destination: string) {
+    if (!page) return;
+    const exported = createWebsiteExport(page, layout, destination);
+    const blob = new Blob([exported.html], { type: "text/html;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = exported.filename;
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
   useEffect(() => {
     if (!activeProjectId || !isDirty || !page || pendingTransition) return;
     const projectId = activeProjectId;
@@ -433,7 +451,7 @@ export default function Home() {
           <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> YOUR CREATIVE STUDIO</div><h1>Let’s make something <em>remarkable.</em></h1><p>Tell us about your business. We’ll turn your big idea into a page worth landing on.</p></div><div className="step-badge"><span>01</span><span className="step-line"/><span>02</span><span className="step-line"/><span>03</span></div></div>
           <div className="project-toolbar">
             <div><strong>{activeProjectName || "Untitled website"}</strong><span className={`save-indicator ${isDirty ? "unsaved" : ""}`} role="status" aria-live="polite">{saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Not saved" : isDirty ? activeProjectId ? "Unsaved changes" : "Unsaved draft" : activeProjectId ? "Saved" : "Not saved yet"}</span></div>
-            <div className="project-toolbar-actions"><button type="button" onClick={saveCurrentProject} disabled={!page || saveStatus === "saving"}>Save Project</button><button type="button" onClick={showProjectManager}>My Projects</button><button type="button" onClick={confirmNewProject}>New Project</button></div>
+            <div className="project-toolbar-actions"><button type="button" onClick={() => setExportDialogOpen(true)} disabled={!page}>Export HTML</button><button type="button" onClick={saveCurrentProject} disabled={!page || saveStatus === "saving"}>Save Project</button><button type="button" onClick={showProjectManager}>My Projects</button><button type="button" onClick={confirmNewProject}>New Project</button></div>
           </div>
           {projectStorageError && <p className="project-storage-error page-storage-error" role="alert">{projectStorageError}</p>}
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
@@ -467,6 +485,7 @@ export default function Home() {
         onDiscardAndContinue={continueAfterDiscard}
         onKeepEditing={keepEditing}
       />
+      <ExportDialog open={exportDialogOpen} onClose={() => setExportDialogOpen(false)} onExport={downloadWebsite} />
     </main>
   );
 }

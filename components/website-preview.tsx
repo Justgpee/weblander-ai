@@ -1,4 +1,5 @@
 import type { EditableSection, GeneratedPage } from "@/lib/generation";
+import { GeneratedWebsite } from "@/components/generated-website";
 
 type WebsitePreviewProps = {
   page: GeneratedPage | null;
@@ -50,10 +51,5 @@ function EmptyPreview() {
 }
 
 function GeneratedPreview({ page }: { page: GeneratedPage }) {
-  const styleClass = page.style.toLowerCase();
-  return <div className={`site-mock ${styleClass} ${page.layout}`}>
-    <div className="site-nav"><span className="site-logo">{page.businessName}</span><span className="site-nav-links"><span>Our story</span><span>Collections</span><span>Journal</span></span><button type="button">Shop <span>↗</span></button></div>
-    <div className="site-hero"><div className="site-copy"><span className="preview-kicker">MADE WITH INTENTION <i>✦</i></span><h3>{page.headline}</h3><p>{page.subheadline}</p><div className="site-actions"><button type="button">{page.callToAction || "Discover more"} <span>↗</span></button><span>For {page.audience.toLowerCase()}</span></div><ul className="site-features">{page.features.map((feature, index) => <li key={index}>{feature}</li>)}</ul></div><div className="site-art" aria-hidden="true"><div className="site-arch"><div className="site-orb"/><div className="site-vase vase-one"/><div className="site-vase vase-two"/><div className="site-table"/><span className="art-spark">✳</span></div><span className="art-caption">Fig. 01 — The everyday edit</span></div></div>
-    <div className="site-bottom"><span>Designed for the everyday</span><span>01 / 03</span></div>
-  </div>;
+  return <GeneratedWebsite page={page} />;
 }
