@@ -108,6 +108,7 @@ describe("standalone website export", () => {
         { label: "Journal", destination: "" },
       ],
       ctaDestination: "https://example.com/contact?from=site&next=%2F",
+      appearance: { ...DEFAULT_SITE_SETTINGS.appearance },
     };
     const preview = renderGeneratedWebsite(page, settings);
     const exported = createWebsiteExport(page, "split", settings).html;
@@ -119,6 +120,33 @@ describe("standalone website export", () => {
       expect(markup).toContain('href="https://example.com/contact?from=site&amp;next=%2F"');
       expect(markup).not.toContain("Our <story>");
     }
+  });
+
+  it("uses matching resolved appearance values in preview and export for every style and layout", () => {
+    for (const style of VISUAL_STYLES) for (const layout of ["editorial", "split"] as const) {
+      const customized: SiteSettings = {
+        ...DEFAULT_SITE_SETTINGS,
+        appearance: {
+          colors: { primary: "#1A2938", background: "#F7F4EE", accent: "#A56B42" },
+          typography: "humanist-sans",
+        },
+      };
+      const currentPage = { ...page, style, layout };
+      const preview = renderGeneratedWebsite(currentPage, customized);
+      const exported = createWebsiteExport(currentPage, layout, customized).html;
+      const inlineStyle = 'style="--site-ink:#1A2938;--site-bg:#F7F4EE;--site-accent:#A56B42;--site-serif:&#39;Trebuchet MS&#39;, Arial, sans-serif;--site-body-font:&#39;Trebuchet MS&#39;, Arial, sans-serif"';
+      expect(preview).toContain(inlineStyle);
+      expect(exported).toContain(inlineStyle);
+      expect(exported).toContain("Trebuchet MS");
+      expect(exported).not.toMatch(/@import|fonts\.googleapis|https?:\/\/[^\s"']+\.css/i);
+    }
+  });
+
+  it("rejects customized color combinations that do not meet text contrast", () => {
+    expect(() => createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      appearance: { colors: { primary: "#777777", background: "#888888", accent: null }, typography: "preset" },
+    })).toThrow(/contrast requirements/);
   });
 
   it("uses blank link settings as non-interactive labels and rejects unsafe settings", () => {

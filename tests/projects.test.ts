@@ -4,6 +4,7 @@ import { DEFAULT_SITE_SETTINGS, type SiteSettings } from "@/lib/site-settings";
 import {
   ProjectCollectionSchema,
   ProjectCollectionV1Schema,
+  ProjectCollectionV2Schema,
   ProjectRecordSchema,
   ProjectStorageError,
   createProjectStorage,
@@ -58,12 +59,13 @@ describe("persisted project schemas", () => {
     const { projects } = setup();
     const saved = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     expect(ProjectRecordSchema.safeParse(saved).success).toBe(true);
-    expect(ProjectCollectionSchema.safeParse({ version: 2, projects: [saved] }).success).toBe(true);
+    expect(ProjectCollectionSchema.safeParse({ version: 3, projects: [saved] }).success).toBe(true);
+    expect(ProjectCollectionV2Schema.safeParse({ version: 2, projects: [{ ...saved, siteSettings: { navigation: saved.siteSettings.navigation, ctaDestination: saved.siteSettings.ctaDestination } }] }).success).toBe(true);
     expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [saved] }).success).toBe(false);
     const legacyRecord = { ...saved } as Record<string, unknown>;
     delete legacyRecord.siteSettings;
     expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [legacyRecord] }).success).toBe(true);
-    expect(ProjectCollectionSchema.safeParse({ version: 2, projects: [saved, saved] }).success).toBe(false);
+    expect(ProjectCollectionSchema.safeParse({ version: 3, projects: [saved, saved] }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, id: "not-a-uuid" }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, name: "   " }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, name: "x".repeat(81) }).success).toBe(false);
@@ -116,6 +118,10 @@ describe("local project storage", () => {
         { label: "Journal", destination: "" },
       ],
       ctaDestination: "https://example.com/contact",
+      appearance: {
+        colors: { primary: "#1A2938", background: "#F7F4EE", accent: "#A56B42" },
+        typography: "editorial-serif",
+      },
     };
     const snapshot = projectSnapshotFromPage(brief, page, "split", siteSettings);
     const saved = projects.create("Northline", snapshot);
@@ -178,9 +184,16 @@ describe("local project storage", () => {
     storage.value = JSON.stringify({ version: 1, projects: [{ id: "invalid" }] });
     expect(() => projects.list()).toThrowError(/invalid/);
     expect(storage.value).toBe(JSON.stringify({ version: 1, projects: [{ id: "invalid" }] }));
+
+    const malformedV2 = JSON.stringify({ version: 2, projects: [{ id: "invalid", siteSettings: { navigation: [], ctaDestination: "" } }] });
+    storage.value = malformedV2;
+    const writesBeforeMalformedV2 = storage.writes;
+    expect(() => projects.list()).toThrowError(/invalid/);
+    expect(storage.value).toBe(malformedV2);
+    expect(storage.writes).toBe(writesBeforeMalformedV2);
   });
 
-  it("migrates fully validated v1 records in memory and writes v2 on the next successful mutation", () => {
+  it("migrates fully validated v1 records in memory and writes v3 on the next successful mutation", () => {
     const { storage, projects } = setup();
     const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     const v1Record = { ...original } as Record<string, unknown>;
@@ -204,12 +217,30 @@ describe("local project storage", () => {
     expect(storage.writes).toBe(writesBeforeRead);
     const saved = projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
     expect(saved.revision).toBe(8);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(2);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(3);
+  });
+
+  it("migrates v2 settings without changing project data and adds default appearance in memory", () => {
+    const { storage, projects } = setup();
+    const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
+    const v2 = { ...original, siteSettings: { navigation: original.siteSettings.navigation, ctaDestination: "https://example.com/contact" } };
+    storage.value = JSON.stringify({ version: 2, projects: [v2] });
+    const writesBeforeRead = storage.writes;
+    const loaded = projects.load(original.id);
+    expect(loaded).toMatchObject({
+      id: original.id, name: original.name, brief: original.brief, content: original.content,
+      layout: original.layout, createdAt: original.createdAt, updatedAt: original.updatedAt,
+      revision: original.revision,
+      siteSettings: { ...v2.siteSettings, appearance: DEFAULT_SITE_SETTINGS.appearance },
+    });
+    expect(storage.writes).toBe(writesBeforeRead);
+    projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(3);
   });
 
   it("never rewrites malformed or unsupported future collection versions", () => {
     const { storage, projects } = setup();
-    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 3, projects: [] }]) {
+    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 4, projects: [] }]) {
       storage.value = JSON.stringify(value);
       const before = storage.value;
       const writes = storage.writes;

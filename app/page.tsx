@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { EMPTY_BRIEF, EditableSectionSchema, GeneratedPageSchema, SectionContentSchemas, type BusinessBrief, type EditableSection, type GeneratedPage } from "@/lib/generation";
+import { EMPTY_BRIEF, EditableSectionSchema, GeneratedPageSchema, SectionContentSchemas, VisualStyleSchema, type BusinessBrief, type EditableSection, type GeneratedPage } from "@/lib/generation";
 import { BriefForm } from "@/components/brief-form";
 import { WebsitePreview } from "@/components/website-preview";
 import { mergeGeneratedSectionIfUnchanged } from "@/lib/page-editing";
@@ -18,7 +18,7 @@ import {
   type ProjectStorage,
 } from "@/lib/projects";
 import { createWebsiteExport } from "@/lib/website-export";
-import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, type SiteSettings } from "@/lib/site-settings";
+import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteSettings } from "@/lib/site-settings";
 
 type SectionState = Record<EditableSection, { loading: boolean; error: string }>;
 const EMPTY_SECTION_STATE: SectionState = {
@@ -195,6 +195,12 @@ export default function Home() {
       return false;
     }
     try {
+      const contrast = validateAppearanceContrast(brief.style, siteSettings.appearance);
+      if (!contrast.valid) {
+        setSaveStatus("error");
+        setProjectStorageError(contrast.issues.join(" "));
+        return false;
+      }
       const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
       const storage = getProjectStorage();
       const saved = activeProjectIdRef.current
@@ -309,6 +315,12 @@ export default function Home() {
       if (pendingTransitionRef.current || activeProjectIdRef.current !== projectId || dirtyRevisionRef.current !== version || activeProjectRevisionRef.current !== expectedRevision) return;
       setSaveStatus("saving");
       try {
+        const contrast = validateAppearanceContrast(brief.style, siteSettings.appearance);
+        if (!contrast.valid) {
+          setSaveStatus("error");
+          setProjectStorageError(contrast.issues.join(" "));
+          return;
+        }
         const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
         const saved = getProjectStorage().save(projectId, snapshot, expectedRevision);
         if (dirtyRevisionRef.current !== version || activeProjectIdRef.current !== projectId) return;
@@ -330,6 +342,16 @@ export default function Home() {
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
     setBrief((current) => ({ ...current, [key]: value }));
+    if (key === "style") {
+      const style = VisualStyleSchema.parse(value);
+      setPage((current) => current ? { ...current, style } : current);
+    }
+    markDirty();
+  }
+
+  function updateAppearance(appearance: Appearance) {
+    const validatedAppearance = AppearanceSchema.parse(appearance);
+    setSiteSettings((current) => ({ ...current, appearance: validatedAppearance }));
     markDirty();
   }
 
@@ -480,7 +502,7 @@ export default function Home() {
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
           <div className="studio-grid" id="brief">
             <BriefForm brief={brief} onChange={updateBrief} onSubmit={submit} loading={loading} />
-          <WebsitePreview page={page} layout={layout} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} />
+          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
           <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>

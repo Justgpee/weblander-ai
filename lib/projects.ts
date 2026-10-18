@@ -1,9 +1,16 @@
 import { z } from "zod";
 import { BusinessBriefSchema, type BusinessBrief } from "@/lib/generation";
-import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, type SiteSettings } from "@/lib/site-settings";
+import {
+  DEFAULT_APPEARANCE,
+  DEFAULT_SITE_SETTINGS,
+  SiteSettingsSchema,
+  SiteSettingsV2Schema,
+  validateAppearanceContrast,
+  type SiteSettings,
+} from "@/lib/site-settings";
 
 export const PROJECT_STORAGE_KEY = "weblander-ai:projects";
-export const PROJECT_COLLECTION_VERSION = 2;
+export const PROJECT_COLLECTION_VERSION = 3;
 
 export const ProjectIdSchema = z.string().uuid();
 export const ProjectNameSchema = z.string().trim().min(1).max(80);
@@ -17,12 +24,16 @@ export const ProjectPageContentSchema = z.object({
 }).strict();
 export type ProjectPageContent = z.infer<typeof ProjectPageContentSchema>;
 
-export const ProjectSnapshotSchema = z.object({
+const ProjectSnapshotBaseSchema = z.object({
   brief: BusinessBriefSchema,
   content: ProjectPageContentSchema,
   layout: ProjectLayoutSchema,
   siteSettings: SiteSettingsSchema,
 }).strict();
+export const ProjectSnapshotSchema = ProjectSnapshotBaseSchema.superRefine((snapshot, context) => {
+  const contrast = validateAppearanceContrast(snapshot.brief.style, snapshot.siteSettings.appearance);
+  if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
+});
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 
 const ProjectRecordFields = {
@@ -47,12 +58,22 @@ function withProjectTimeValidation<T extends z.ZodRawShape>(shape: T) {
 }
 
 export const ProjectRecordV1Schema = withProjectTimeValidation(ProjectRecordFields);
-export const ProjectRecordSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
+export const ProjectRecordV2Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsV2Schema });
+const ProjectRecordV3BaseSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
+export const ProjectRecordSchema = ProjectRecordV3BaseSchema.superRefine((project, context) => {
+  const contrast = validateAppearanceContrast(project.brief.style, project.siteSettings.appearance);
+  if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
+});
 export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 export const ProjectCollectionV1Schema = z.object({
   version: z.literal(1),
   projects: z.array(ProjectRecordV1Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+export const ProjectCollectionV2Schema = z.object({
+  version: z.literal(2),
+  projects: z.array(ProjectRecordV2Schema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
 
 export const ProjectCollectionSchema = z.object({
@@ -126,6 +147,16 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     }
     const current = ProjectCollectionSchema.safeParse(value);
     if (current.success) return current.data;
+    const version2 = ProjectCollectionV2Schema.safeParse(value);
+    if (version2.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version2.data.projects.map((project) => ({
+          ...project,
+          siteSettings: { ...project.siteSettings, appearance: DEFAULT_APPEARANCE },
+        })),
+      };
+    }
     const legacy = ProjectCollectionV1Schema.safeParse(value);
     if (legacy.success) {
       return {

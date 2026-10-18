@@ -2,6 +2,9 @@ import type { EditableSection, GeneratedPage } from "@/lib/generation";
 import { GeneratedWebsite } from "@/components/generated-website";
 import type { SiteSettings } from "@/lib/site-settings";
 import { SiteDestinationSchema, SiteNavigationEntrySchema } from "@/lib/site-settings";
+import { AppearanceEditor } from "@/components/appearance-editor";
+import type { Appearance } from "@/lib/site-settings";
+import type { VisualStyle } from "@/lib/generation";
 
 type WebsitePreviewProps = {
   page: GeneratedPage | null;
@@ -14,9 +17,12 @@ type WebsitePreviewProps = {
   sectionState: Record<EditableSection, { loading: boolean; error: string }>;
   onEdit: (section: EditableSection, value: string, featureIndex?: number) => void;
   onRegenerate: (section: EditableSection) => void;
+  style: VisualStyle;
+  appearance: Appearance;
+  onAppearanceChange: (appearance: Appearance) => void;
 };
 
-export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange, onCtaDestinationChange, loading, onLayoutChange, sectionState, onEdit, onRegenerate }: WebsitePreviewProps) {
+export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange, onCtaDestinationChange, loading, onLayoutChange, sectionState, onEdit, onRegenerate, style, appearance, onAppearanceChange }: WebsitePreviewProps) {
   return (
     <section className="preview-column" aria-label="Website preview">
       <div className="preview-header"><div><div className="section-kicker">THE FIRST LOOK</div><h2>Your live preview</h2></div><div className="viewport-switch" aria-label="Preview layout"><button type="button" className={layout === "editorial" ? "active" : ""} aria-pressed={layout === "editorial"} onClick={() => onLayoutChange("editorial")} title="Editorial layout"><span>▤</span></button><button type="button" className={layout === "split" ? "active" : ""} aria-pressed={layout === "split"} onClick={() => onLayoutChange("split")} title="Split layout"><span>▥</span></button></div></div>
@@ -52,6 +58,7 @@ export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange
           </div>
         </div>
       </details>
+      <AppearanceEditor style={style} appearance={appearance} onChange={onAppearanceChange} />
       <div className={`browser-frame ${loading ? "is-loading" : ""}`}>
         <div className="browser-bar"><div className="browser-dots"><i/><i/><i/></div><div className="address-bar"><span>⌑</span> yourbrand.com</div><span className="browser-more">···</span></div>
         {loading ? <div className="preview-loading"><div className="loading-orbit">✦</div><strong>Bringing your idea to life</strong><span>Putting the finishing touches on your page…</span><div className="loading-track"><i /></div></div> : page ? <GeneratedPreview page={page} siteSettings={siteSettings} /> : <EmptyPreview />}
