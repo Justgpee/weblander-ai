@@ -32,4 +32,4 @@ npm run build
 
 ## Current scope
 
-The app includes a business brief form, visual style selection, structured AI copy generation, editable generated copy with section regeneration, and a responsive landing-page preview with two layouts. Saved website projects are stored locally in the current browser; they are not synced across devices or accounts. HTML export is not included.
+The app includes a business brief form, visual style selection, structured AI copy generation, editable generated copy with section regeneration, configurable three-link navigation and call-to-action destinations, and a responsive landing-page preview with two layouts. Saved website projects are stored locally in the current browser; they are not synced across devices or accounts. Standalone HTML export includes the current content, layout, and validated site links.

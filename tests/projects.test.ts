@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { BusinessBrief } from "@/lib/generation";
+import { DEFAULT_SITE_SETTINGS, type SiteSettings } from "@/lib/site-settings";
 import {
   ProjectCollectionSchema,
+  ProjectCollectionV1Schema,
   ProjectRecordSchema,
   ProjectStorageError,
   createProjectStorage,
@@ -56,9 +58,12 @@ describe("persisted project schemas", () => {
     const { projects } = setup();
     const saved = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     expect(ProjectRecordSchema.safeParse(saved).success).toBe(true);
-    expect(ProjectCollectionSchema.safeParse({ version: 1, projects: [saved] }).success).toBe(true);
-    expect(ProjectCollectionSchema.safeParse({ version: 2, projects: [saved] }).success).toBe(false);
-    expect(ProjectCollectionSchema.safeParse({ version: 1, projects: [saved, saved] }).success).toBe(false);
+    expect(ProjectCollectionSchema.safeParse({ version: 2, projects: [saved] }).success).toBe(true);
+    expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [saved] }).success).toBe(false);
+    const legacyRecord = { ...saved } as Record<string, unknown>;
+    delete legacyRecord.siteSettings;
+    expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [legacyRecord] }).success).toBe(true);
+    expect(ProjectCollectionSchema.safeParse({ version: 2, projects: [saved, saved] }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, id: "not-a-uuid" }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, name: "   " }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, name: "x".repeat(81) }).success).toBe(false);
@@ -85,6 +90,7 @@ describe("local project storage", () => {
       brief: { ...brief, description: "A revised original brief description." },
       content: { ...first.content, description: "An independently edited website description for the saved project." },
       layout: "editorial",
+      siteSettings: first.siteSettings,
     }, first.revision);
     expect(saved.revision).toBe(2);
     expect(saved.createdAt).toBe(first.createdAt);
@@ -103,7 +109,15 @@ describe("local project storage", () => {
 
   it("round-trips the original brief separately from edited page content and restores layout and CTA", () => {
     const { storage, projects } = setup();
-    const snapshot = projectSnapshotFromPage(brief, page, "split");
+    const siteSettings: SiteSettings = {
+      navigation: [
+        { label: "Our work", destination: "#site-headline" },
+        { label: "Collections", destination: "https://example.com/collections" },
+        { label: "Journal", destination: "" },
+      ],
+      ctaDestination: "https://example.com/contact",
+    };
+    const snapshot = projectSnapshotFromPage(brief, page, "split", siteSettings);
     const saved = projects.create("Northline", snapshot);
     const reopened = pageFromProject(projects.load(saved.id));
     expect(reopened).toMatchObject({
@@ -119,6 +133,7 @@ describe("local project storage", () => {
     expect(saved.brief.callToAction).toBe(brief.callToAction);
     expect(saved.content.callToAction).toBe(page.callToAction);
     expect(JSON.parse(storage.value ?? "{}").projects[0].layout).toBe("split");
+    expect(projects.load(saved.id).siteSettings).toEqual(siteSettings);
   });
 
   it("keeps updated timestamps increasing when the injected clock has the same time", () => {
@@ -163,6 +178,45 @@ describe("local project storage", () => {
     storage.value = JSON.stringify({ version: 1, projects: [{ id: "invalid" }] });
     expect(() => projects.list()).toThrowError(/invalid/);
     expect(storage.value).toBe(JSON.stringify({ version: 1, projects: [{ id: "invalid" }] }));
+  });
+
+  it("migrates fully validated v1 records in memory and writes v2 on the next successful mutation", () => {
+    const { storage, projects } = setup();
+    const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
+    const v1Record = { ...original } as Record<string, unknown>;
+    delete v1Record.siteSettings;
+    const oldData = { version: 1, projects: [{ ...v1Record, revision: 7, name: "Legacy name" }] };
+    storage.value = JSON.stringify(oldData);
+    const writesBeforeRead = storage.writes;
+
+    const loaded = projects.load(original.id);
+    expect(loaded).toMatchObject({
+      id: original.id,
+      name: "Legacy name",
+      brief: original.brief,
+      content: original.content,
+      layout: "split",
+      createdAt: original.createdAt,
+      updatedAt: original.updatedAt,
+      revision: 7,
+      siteSettings: DEFAULT_SITE_SETTINGS,
+    });
+    expect(storage.writes).toBe(writesBeforeRead);
+    const saved = projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
+    expect(saved.revision).toBe(8);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(2);
+  });
+
+  it("never rewrites malformed or unsupported future collection versions", () => {
+    const { storage, projects } = setup();
+    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 3, projects: [] }]) {
+      storage.value = JSON.stringify(value);
+      const before = storage.value;
+      const writes = storage.writes;
+      expect(() => projects.list()).toThrowError(ProjectStorageError);
+      expect(storage.value).toBe(before);
+      expect(storage.writes).toBe(writes);
+    }
   });
 
   it("returns safe errors for unavailable and quota-limited storage", () => {

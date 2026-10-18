@@ -5,11 +5,12 @@ import { validateCtaDestination } from "@/lib/website-export";
 
 type ExportDialogProps = {
   open: boolean;
+  initialDestination: string;
   onClose: () => void;
   onExport: (destination: string) => void;
 };
 
-export function ExportDialog({ open, onClose, onExport }: ExportDialogProps) {
+export function ExportDialog({ open, initialDestination, onClose, onExport }: ExportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
@@ -18,11 +19,13 @@ export function ExportDialog({ open, onClose, onExport }: ExportDialogProps) {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open && !dialog.open) {
+      setDestination(initialDestination);
+      setError("");
       dialog.showModal();
       dialog.querySelector<HTMLInputElement>("input")?.focus();
     }
     if (!open && dialog.open) dialog.close();
-  }, [open]);
+  }, [initialDestination, open]);
 
   if (!open) return null;
 

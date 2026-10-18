@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { VISUAL_STYLES, type GeneratedPage } from "@/lib/generation";
 import { createWebsiteExport, renderGeneratedWebsite, sanitizeExportFilename, validateCtaDestination } from "@/lib/website-export";
+import { DEFAULT_SITE_SETTINGS, type SiteSettings } from "@/lib/site-settings";
 
 const page: GeneratedPage = {
   businessName: "Northline Studio", description: "Design for independent teams.", audience: "Founders", offering: "Brand identity",
@@ -97,6 +98,39 @@ describe("standalone website export", () => {
     expect(previewMarkup).toContain('<h1 id="site-headline">Build a brand');
     expect(previewMarkup).toContain('class="site-mock professional editorial preview"');
     expect(html).toContain('<h1 id="site-headline">Build a brand');
+  });
+
+  it("renders configured navigation and CTA destinations as escaped functional links", () => {
+    const settings: SiteSettings = {
+      navigation: [
+        { label: "Our <story> & more", destination: "#top" },
+        { label: "Collections", destination: "https://example.com/shop?a=1&b=2" },
+        { label: "Journal", destination: "" },
+      ],
+      ctaDestination: "https://example.com/contact?from=site&next=%2F",
+    };
+    const preview = renderGeneratedWebsite(page, settings);
+    const exported = createWebsiteExport(page, "split", settings).html;
+    for (const markup of [preview, exported]) {
+      expect(markup).toContain('<a href="#top">Our &lt;story&gt; &amp; more</a>');
+      expect(markup).toContain('<a href="https://example.com/shop?a=1&amp;b=2">Collections</a>');
+      expect(markup).toContain("<span>Journal</span>");
+      expect(markup).not.toContain('<a href="">Journal</a>');
+      expect(markup).toContain('href="https://example.com/contact?from=site&amp;next=%2F"');
+      expect(markup).not.toContain("Our <story>");
+    }
+  });
+
+  it("uses blank link settings as non-interactive labels and rejects unsafe settings", () => {
+    const html = createWebsiteExport(page, "editorial", DEFAULT_SITE_SETTINGS).html;
+    const preview = renderGeneratedWebsite(page, DEFAULT_SITE_SETTINGS);
+    expect(html).toContain("<span>Our story</span><span>Collections</span><span>Journal</span>");
+    expect(html).not.toMatch(/<a href="">/);
+    expect(preview).toContain('<span class="site-cta site-cta-text">Book a conversation</span>');
+    expect(() => createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      navigation: [{ label: "Bad", destination: "javascript:alert(1)" }, ...DEFAULT_SITE_SETTINGS.navigation.slice(1)],
+    } as never)).toThrow();
   });
 
   it("keeps the preview renderable while the user temporarily edits a field below its final minimum", () => {

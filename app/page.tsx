@@ -18,6 +18,7 @@ import {
   type ProjectStorage,
 } from "@/lib/projects";
 import { createWebsiteExport } from "@/lib/website-export";
+import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, type SiteSettings } from "@/lib/site-settings";
 
 type SectionState = Record<EditableSection, { loading: boolean; error: string }>;
 const EMPTY_SECTION_STATE: SectionState = {
@@ -29,6 +30,7 @@ export default function Home() {
   const [brief, setBrief] = useState<BusinessBrief>(EMPTY_BRIEF);
   const [page, setPage] = useState<GeneratedPage | null>(null);
   const [layout, setLayout] = useState<GeneratedPage["layout"]>("editorial");
+  const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [sectionState, setSectionState] = useState<SectionState>(EMPTY_SECTION_STATE);
@@ -125,6 +127,7 @@ export default function Home() {
     setBrief(EMPTY_BRIEF);
     setPage(null);
     setLayout("editorial");
+    setSiteSettings(DEFAULT_SITE_SETTINGS);
     markClean();
     setSaveStatus("idle");
     setNotice("");
@@ -142,6 +145,7 @@ export default function Home() {
     setBrief(project.brief);
     setPage(pageFromProject(project));
     setLayout(project.layout);
+    setSiteSettings(SiteSettingsSchema.parse(project.siteSettings));
     markClean();
     setSaveStatus("saved");
     setNotice("");
@@ -191,7 +195,7 @@ export default function Home() {
       return false;
     }
     try {
-      const snapshot = projectSnapshotFromPage(brief, page, layout);
+      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
       const storage = getProjectStorage();
       const saved = activeProjectIdRef.current
         ? storage.save(activeProjectIdRef.current, snapshot, activeProjectRevisionRef.current)
@@ -282,7 +286,8 @@ export default function Home() {
 
   function downloadWebsite(destination: string) {
     if (!page) return;
-    const exported = createWebsiteExport(page, layout, destination);
+    const settings = SiteSettingsSchema.parse({ ...siteSettings, ctaDestination: destination });
+    const exported = createWebsiteExport(page, layout, settings);
     const blob = new Blob([exported.html], { type: "text/html;charset=utf-8" });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -304,7 +309,7 @@ export default function Home() {
       if (pendingTransitionRef.current || activeProjectIdRef.current !== projectId || dirtyRevisionRef.current !== version || activeProjectRevisionRef.current !== expectedRevision) return;
       setSaveStatus("saving");
       try {
-        const snapshot = projectSnapshotFromPage(brief, page, layout);
+        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
         const saved = getProjectStorage().save(projectId, snapshot, expectedRevision);
         if (dirtyRevisionRef.current !== version || activeProjectIdRef.current !== projectId) return;
         activeProjectRevisionRef.current = saved.revision;
@@ -321,7 +326,7 @@ export default function Home() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage]);
+  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage, siteSettings]);
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
     setBrief((current) => ({ ...current, [key]: value }));
@@ -369,6 +374,24 @@ export default function Home() {
     setLayout(next);
     setPage((current) => current ? { ...current, layout: next } : current);
     markDirty();
+  }
+
+  function editSiteSettings(update: (current: SiteSettings) => SiteSettings) {
+    setSiteSettings((current) => update(current));
+    markDirty();
+  }
+
+  function editNavigation(index: number, field: "label" | "destination", value: string) {
+    editSiteSettings((current) => ({
+      ...current,
+      navigation: current.navigation.map((entry, entryIndex) => entryIndex === index
+        ? { ...entry, [field]: value }
+        : entry) as SiteSettings["navigation"],
+    }));
+  }
+
+  function editCtaDestination(value: string) {
+    editSiteSettings((current) => ({ ...current, ctaDestination: value }));
   }
 
   function editGeneratedSection(section: EditableSection, value: string, featureIndex?: number) {
@@ -457,7 +480,7 @@ export default function Home() {
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
           <div className="studio-grid" id="brief">
             <BriefForm brief={brief} onChange={updateBrief} onSubmit={submit} loading={loading} />
-            <WebsitePreview page={page} layout={layout} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} />
+          <WebsitePreview page={page} layout={layout} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
           <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>
@@ -485,7 +508,7 @@ export default function Home() {
         onDiscardAndContinue={continueAfterDiscard}
         onKeepEditing={keepEditing}
       />
-      <ExportDialog open={exportDialogOpen} onClose={() => setExportDialogOpen(false)} onExport={downloadWebsite} />
+      <ExportDialog open={exportDialogOpen} initialDestination={siteSettings.ctaDestination} onClose={() => setExportDialogOpen(false)} onExport={(destination) => { downloadWebsite(destination); editCtaDestination(destination); }} />
     </main>
   );
 }

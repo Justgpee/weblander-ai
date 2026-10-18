@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { BusinessBriefSchema, type BusinessBrief } from "@/lib/generation";
+import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, type SiteSettings } from "@/lib/site-settings";
 
 export const PROJECT_STORAGE_KEY = "weblander-ai:projects";
-export const PROJECT_COLLECTION_VERSION = 1;
+export const PROJECT_COLLECTION_VERSION = 2;
 
 export const ProjectIdSchema = z.string().uuid();
 export const ProjectNameSchema = z.string().trim().min(1).max(80);
@@ -20,10 +21,11 @@ export const ProjectSnapshotSchema = z.object({
   brief: BusinessBriefSchema,
   content: ProjectPageContentSchema,
   layout: ProjectLayoutSchema,
+  siteSettings: SiteSettingsSchema,
 }).strict();
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 
-export const ProjectRecordSchema = z.object({
+const ProjectRecordFields = {
   id: ProjectIdSchema,
   name: ProjectNameSchema,
   brief: BusinessBriefSchema,
@@ -32,25 +34,41 @@ export const ProjectRecordSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   revision: z.number().int().positive(),
-}).strict().superRefine((project, context) => {
-  if (Date.parse(project.updatedAt) < Date.parse(project.createdAt)) {
-    context.addIssue({ code: "custom", path: ["updatedAt"], message: "Updated time cannot be earlier than creation time." });
-  }
-});
+};
+
+function withProjectTimeValidation<T extends z.ZodRawShape>(shape: T) {
+  const schema = z.object(shape).strict();
+  return schema.superRefine((value, context) => {
+    const project = value as { createdAt: string; updatedAt: string };
+    if (Date.parse(project.updatedAt) < Date.parse(project.createdAt)) {
+      context.addIssue({ code: "custom", path: ["updatedAt"], message: "Updated time cannot be earlier than creation time." });
+    }
+  });
+}
+
+export const ProjectRecordV1Schema = withProjectTimeValidation(ProjectRecordFields);
+export const ProjectRecordSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
 export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
+
+export const ProjectCollectionV1Schema = z.object({
+  version: z.literal(1),
+  projects: z.array(ProjectRecordV1Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
 
 export const ProjectCollectionSchema = z.object({
   version: z.literal(PROJECT_COLLECTION_VERSION),
   projects: z.array(ProjectRecordSchema),
-}).strict().superRefine((collection, context) => {
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+function validateUniqueProjectIds(projects: Array<{ id: string }>, context: z.RefinementCtx) {
   const seenIds = new Set<string>();
-  collection.projects.forEach((project, index) => {
+  projects.forEach((project, index) => {
     if (seenIds.has(project.id)) {
       context.addIssue({ code: "custom", path: ["projects", index, "id"], message: "Project IDs must be unique." });
     }
     seenIds.add(project.id);
   });
-});
+}
 export type ProjectCollection = z.infer<typeof ProjectCollectionSchema>;
 
 export type ProjectStorageLike = Pick<Storage, "getItem" | "setItem">;
@@ -106,9 +124,16 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     } catch {
       throw new ProjectStorageError("CORRUPT");
     }
-    const result = ProjectCollectionSchema.safeParse(value);
-    if (!result.success) throw new ProjectStorageError("CORRUPT");
-    return result.data;
+    const current = ProjectCollectionSchema.safeParse(value);
+    if (current.success) return current.data;
+    const legacy = ProjectCollectionV1Schema.safeParse(value);
+    if (legacy.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: legacy.data.projects.map((project) => ({ ...project, siteSettings: DEFAULT_SITE_SETTINGS })),
+      };
+    }
+    throw new ProjectStorageError("CORRUPT");
   }
 
   function writeCollection(collection: ProjectCollection) {
@@ -219,7 +244,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
   subheadline: string;
   features: string[];
   callToAction: string;
-}, layout: "editorial" | "split"): ProjectSnapshot {
+}, layout: "editorial" | "split", siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS): ProjectSnapshot {
   return ProjectSnapshotSchema.parse({
     brief,
     content: {
@@ -229,6 +254,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
       callToAction: page.callToAction,
     },
     layout,
+    siteSettings,
   });
 }
 
@@ -241,4 +267,8 @@ export function pageFromProject(project: ProjectRecord) {
     callToAction: project.content.callToAction,
     layout: project.layout,
   };
+}
+
+export function siteSettingsFromProject(project: ProjectRecord): SiteSettings {
+  return project.siteSettings;
 }
