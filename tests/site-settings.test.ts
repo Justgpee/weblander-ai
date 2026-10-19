@@ -9,6 +9,7 @@ import {
   SITE_STYLE_PALETTES,
   TypographySchema,
   contrastRatio,
+  hasPreservedAccentBorderWarning,
   resolveEffectiveAppearance,
   validateAppearanceContrast,
   validateSiteDestination,
@@ -72,5 +73,20 @@ describe("appearance settings", () => {
   it("does not reject an accent used decoratively when text and CTA contrast pass", () => {
     const result = validateAppearanceContrast("Minimalist", { colors: { primary: "#111111", background: "#FFFFFF", accent: "#EEEEEE" }, typography: "preset" });
     expect(result.valid).toBe(true);
+  });
+
+  it("keeps the legacy Minimalist and Professional CTA-border warning with a background-only override", () => {
+    for (const style of ["Minimalist", "Professional"] as const) {
+      const backgroundOverride = {
+        ...DEFAULT_APPEARANCE,
+        colors: { ...DEFAULT_APPEARANCE.colors, background: "#FFFFFF" },
+      };
+      expect(hasPreservedAccentBorderWarning(style, backgroundOverride)).toBe(true);
+      expect(validateAppearanceContrast(style, backgroundOverride).accentControl).toBeLessThan(3);
+    }
+    expect(hasPreservedAccentBorderWarning("Luxury", {
+      ...DEFAULT_APPEARANCE,
+      colors: { ...DEFAULT_APPEARANCE.colors, background: "#FFFFFF" },
+    })).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import {
   SITE_STYLE_PALETTES,
   TypographySchema,
+  hasPreservedAccentBorderWarning,
   validateAppearanceContrast,
   type Appearance,
   type Typography,
@@ -20,6 +21,7 @@ export function AppearanceEditor({ style, appearance, onChange }: {
 }) {
   const palette = SITE_STYLE_PALETTES[style];
   const contrast = validateAppearanceContrast(style, appearance);
+  const showPresetAccentWarning = hasPreservedAccentBorderWarning(style, appearance);
 
   function setColor(key: keyof Appearance["colors"], color: string | null) {
     onChange({ ...appearance, colors: { ...appearance.colors, [key]: color } });
@@ -60,7 +62,7 @@ export function AppearanceEditor({ style, appearance, onChange }: {
         <strong>{contrast.valid ? "Text contrast meets the required levels." : "Improve contrast before saving or exporting."}</strong>
         <span>Normal text: {contrast.normalText.toFixed(2)}:1 (4.5:1 required) · CTA text: {contrast.ctaText.toFixed(2)}:1 (4.5:1 required)</span>
         {(appearance.colors.primary !== null || appearance.colors.accent !== null) && <span>Accent border: {contrast.accentControl.toFixed(2)}:1 (3:1 required when customized)</span>}
-        {!contrast.issues.length && appearance.colors.primary === null && appearance.colors.background === null && appearance.colors.accent === null && contrast.accentControl < 3 && <span>Style default accent border is {contrast.accentControl.toFixed(2)}:1. This existing preset is preserved; adjust the accent or primary color to meet 3:1.</span>}
+        {showPresetAccentWarning && <span>Style default accent border is {contrast.accentControl.toFixed(2)}:1. This existing preset is preserved; adjust the accent or primary color to meet 3:1.</span>}
         {contrast.issues.map((issue) => <span role="alert" key={issue}>{issue}</span>)}
       </div>
       <button className="appearance-reset-all" type="button" onClick={() => onChange({ colors: { primary: null, background: null, accent: null }, typography: "preset" })}>Reset all appearance to style defaults</button>

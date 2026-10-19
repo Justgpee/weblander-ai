@@ -4,11 +4,13 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { GeneratedPageContentSchema, SectionStructuredOutputSchemas, type BusinessBrief, type EditableSection } from "@/lib/generation";
 import { GenerationError } from "@/lib/ai/errors";
 
+export const OPENAI_REQUEST_TIMEOUT_MS = 30_000;
+
 export async function requestGeneratedContent(brief: BusinessBrief) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new GenerationError("CONFIGURATION", "Generation is not configured on this server.");
 
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey, timeout: OPENAI_REQUEST_TIMEOUT_MS, maxRetries: 0 });
   const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
   try {
     const response = await client.responses.parse({
@@ -36,7 +38,7 @@ export async function requestGeneratedSection(brief: BusinessBrief, section: Edi
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new GenerationError("CONFIGURATION", "Generation is not configured on this server.");
 
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey, timeout: OPENAI_REQUEST_TIMEOUT_MS, maxRetries: 0 });
   const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
   const schema = SectionStructuredOutputSchemas[section];
   try {

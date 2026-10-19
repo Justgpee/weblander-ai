@@ -114,6 +114,13 @@ export function validateAppearanceContrast(style: VisualStyle, appearance: Appea
   return { normalText, largeText, ctaText, accentControl, issues, valid: issues.length === 0 };
 }
 
+/** Existing preset borders below 3:1 stay visible when unrelated colors are customized. */
+export function hasPreservedAccentBorderWarning(style: VisualStyle, appearance: Appearance) {
+  return appearance.colors.primary === null
+    && appearance.colors.accent === null
+    && validateAppearanceContrast(style, appearance).accentControl < 3;
+}
+
 /** CSS variables are emitted only from validated hex values and fixed local stacks. */
 export function effectiveAppearanceCss(style: VisualStyle, appearance: Appearance): string {
   const effective = resolveEffectiveAppearance(style, appearance);

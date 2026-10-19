@@ -19,12 +19,8 @@ import {
 } from "@/lib/projects";
 import { createWebsiteExport } from "@/lib/website-export";
 import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteSettings } from "@/lib/site-settings";
-
-type SectionState = Record<EditableSection, { loading: boolean; error: string }>;
-const EMPTY_SECTION_STATE: SectionState = {
-  headline: { loading: false, error: "" }, description: { loading: false, error: "" },
-  features: { loading: false, error: "" }, callToAction: { loading: false, error: "" },
-};
+import { createEmptySectionRequestState, type SectionRequestState } from "@/lib/section-request-state";
+import { createStudioRequestCoordinator } from "@/lib/studio-request-coordinator";
 
 export default function Home() {
   const [brief, setBrief] = useState<BusinessBrief>(EMPTY_BRIEF);
@@ -33,9 +29,8 @@ export default function Home() {
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
-  const [sectionState, setSectionState] = useState<SectionState>(EMPTY_SECTION_STATE);
-  const inFlightSections = useRef(new Set<EditableSection>());
-  const sectionEditRevisions = useRef<Record<EditableSection, number>>({ headline: 0, description: 0, features: 0, callToAction: 0 });
+  const [sectionState, setSectionState] = useState<SectionRequestState>(createEmptySectionRequestState);
+  const [requestCoordinator] = useState(createStudioRequestCoordinator);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeProjectName, setActiveProjectName] = useState("");
@@ -54,6 +49,14 @@ export default function Home() {
   const activeProjectRevisionRef = useRef(0);
   const dirtyRevisionRef = useRef(0);
   const isDirtyRef = useRef(false);
+
+  function generationContextKey() {
+    return requestCoordinator.generationContextKey(activeProjectIdRef.current);
+  }
+
+  function sectionContextKey() {
+    return requestCoordinator.sectionContextKey(activeProjectIdRef.current);
+  }
 
   const getProjectStorage = useCallback(() => {
     if (!projectStorageRef.current) {
@@ -111,13 +114,14 @@ export default function Home() {
   }
 
   function invalidateSectionResponses() {
-    for (const section of Object.keys(sectionEditRevisions.current) as EditableSection[]) {
-      sectionEditRevisions.current[section] += 1;
-    }
+    requestCoordinator.pageReplaced(() => setSectionState(createEmptySectionRequestState()));
   }
 
   function clearActiveProjectToDraft() {
-    invalidateSectionResponses();
+    requestCoordinator.projectTransition(
+      () => setLoading(false),
+      () => setSectionState(createEmptySectionRequestState()),
+    );
     advanceDirtyRevision();
     activeProjectIdRef.current = null;
     activeProjectRevisionRef.current = 0;
@@ -135,7 +139,10 @@ export default function Home() {
   }
 
   function applyProject(project: ProjectRecord) {
-    invalidateSectionResponses();
+    requestCoordinator.projectTransition(
+      () => setLoading(false),
+      () => setSectionState(createEmptySectionRequestState()),
+    );
     advanceDirtyRevision();
     activeProjectIdRef.current = project.id;
     activeProjectRevisionRef.current = project.revision;
@@ -203,9 +210,16 @@ export default function Home() {
       }
       const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
       const storage = getProjectStorage();
+      const creatingProject = activeProjectIdRef.current === null;
       const saved = activeProjectIdRef.current
         ? storage.save(activeProjectIdRef.current, snapshot, activeProjectRevisionRef.current)
         : storage.create(brief.businessName, snapshot);
+      if (creatingProject) {
+        requestCoordinator.projectTransition(
+          () => setLoading(false),
+          () => setSectionState(createEmptySectionRequestState()),
+        );
+      }
       activeProjectIdRef.current = saved.id;
       activeProjectRevisionRef.current = saved.revision;
       setActiveProjectId(saved.id);
@@ -341,6 +355,10 @@ export default function Home() {
   }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage, siteSettings]);
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
+    requestCoordinator.briefChanged(
+      () => setLoading(false),
+      () => setSectionState(createEmptySectionRequestState()),
+    );
     setBrief((current) => ({ ...current, [key]: value }));
     if (key === "style") {
       const style = VisualStyleSchema.parse(value);
@@ -358,41 +376,53 @@ export default function Home() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (loading) return;
+    const projectId = activeProjectIdRef.current;
+    const requestBrief = brief;
+    const requestLayout = layout;
+    const identity = requestCoordinator.beginGeneration(projectId);
     setNotice("");
     setLoading(true);
-    try {
+    const isCurrent = () => requestCoordinator.isGenerationCurrent(identity, generationContextKey()) && activeProjectIdRef.current === projectId;
+    await requestCoordinator.runGeneration(identity, generationContextKey, async () => {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(brief),
+        body: JSON.stringify(requestBrief),
       });
       const result: unknown = await response.json();
       if (!response.ok || typeof result !== "object" || result === null || !("data" in result)) {
         const message = typeof result === "object" && result !== null && "error" in result && typeof result.error === "object" && result.error !== null && "message" in result.error && typeof result.error.message === "string"
           ? result.error.message
           : "We couldn’t generate your page right now. Please try again.";
-        setNotice(message);
-        return;
+        throw new Error(message);
       }
       const generatedPage = GeneratedPageSchema.safeParse(result.data);
-      if (!generatedPage.success) {
-        setNotice("The generation service returned an invalid page. Please try again.");
-        return;
-      }
-      for (const section of Object.keys(sectionEditRevisions.current) as EditableSection[]) {
-        sectionEditRevisions.current[section] += 1;
-      }
-      setPage({ ...generatedPage.data, layout });
+      if (!generatedPage.success) throw new Error("The generation service returned an invalid page. Please try again.");
+      return generatedPage.data;
+    }, (generatedPage) => {
+      if (!isCurrent()) return;
+      invalidateSectionResponses();
+      setPage((current) => isCurrent() ? { ...generatedPage, layout: requestLayout } : current);
       markDirty();
       setNotice("Your landing page is ready.");
-    } catch {
-      setNotice("Couldn’t connect to the generation service. Check your connection and try again.");
-    } finally {
-      setLoading(false);
-    }
+    }, (error) => {
+      if (!isCurrent()) return;
+      const safeMessages = [
+        "The generation service returned an invalid page. Please try again.",
+        "We couldn’t generate your page right now. Please try again.",
+        "Check that all fields are filled in and within their allowed lengths.",
+        "Generation is not configured on this server.",
+        "The request could not be generated. Please revise the business brief and try again.",
+        "The generation service returned unusable content. Please try again.",
+      ];
+      setNotice(error instanceof Error && safeMessages.includes(error.message)
+        ? error.message
+        : "Couldn’t connect to the generation service. Check your connection and try again.");
+    }, () => setLoading(false));
   }
 
   function changeLayout(next: GeneratedPage["layout"]) {
+    requestCoordinator.layoutChanged(() => setLoading(false));
     setLayout(next);
     setPage((current) => current ? { ...current, layout: next } : current);
     markDirty();
@@ -417,7 +447,7 @@ export default function Home() {
   }
 
   function editGeneratedSection(section: EditableSection, value: string, featureIndex?: number) {
-    sectionEditRevisions.current[section] += 1;
+    requestCoordinator.contentEdited(section, () => setLoading(false));
     setPage((current) => {
       if (!current) return current;
       if (section === "headline") return { ...current, headline: value };
@@ -431,15 +461,17 @@ export default function Home() {
   }
 
   async function regenerateSection(section: EditableSection) {
-    if (inFlightSections.current.has(section)) return;
-    inFlightSections.current.add(section);
-    const requestedRevision = sectionEditRevisions.current[section];
+    const projectId = activeProjectIdRef.current;
+    const requestBrief = brief;
+    const ticket = requestCoordinator.beginSection(section, projectId);
+    if (!ticket) return;
+    const isCurrent = () => requestCoordinator.isSectionCurrent(ticket, sectionContextKey()) && activeProjectIdRef.current === projectId;
     setSectionState((current) => ({ ...current, [section]: { loading: true, error: "" } }));
-    try {
+    await requestCoordinator.runSection(ticket, sectionContextKey, async () => {
       const response = await fetch("/api/regenerate-section", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief, section }),
+        body: JSON.stringify({ brief: requestBrief, section }),
       });
       const result: unknown = await response.json();
       if (!response.ok || typeof result !== "object" || result === null || !("data" in result)) {
@@ -456,28 +488,28 @@ export default function Home() {
       if (!parsedSection.success) throw new Error("This section cannot be regenerated.");
       const validated = SectionContentSchemas[parsedSection.data].safeParse(result.data);
       if (!validated.success) throw new Error("The generation service returned an invalid section. Please try again.");
-      if (sectionEditRevisions.current[section] === requestedRevision) {
-        markDirty();
-        setPage((current) => current ? mergeGeneratedSectionIfUnchanged(
-          current,
-          section,
-          validated.data,
-          requestedRevision,
-          sectionEditRevisions.current[section],
-        ) : current);
-      }
-    } catch (error) {
+      return validated.data;
+    }, (validatedSection) => {
+      if (!isCurrent()) return;
+      markDirty();
+      setPage((current) => current && isCurrent() ? mergeGeneratedSectionIfUnchanged(
+        current,
+        section,
+        validatedSection,
+        ticket.revision,
+        requestCoordinator.currentSectionRevision(section),
+      ) : current);
+    }, (error) => {
+      if (!isCurrent()) return;
       const safeMessage = error instanceof Error && [
+        "We couldn’t regenerate this section. Please try again.",
         "AI generation is not configured on this server.",
         "The request could not be generated. Revise the brief and try again.",
         "The generation service returned invalid content. Please try again.",
         "The generation service returned an invalid section. Please try again.",
       ].includes(error.message) ? error.message : "We couldn’t regenerate this section. Please try again.";
       setSectionState((current) => ({ ...current, [section]: { loading: true, error: safeMessage } }));
-    } finally {
-      inFlightSections.current.delete(section);
-      setSectionState((current) => ({ ...current, [section]: { ...current[section], loading: false } }));
-    }
+    }, () => setSectionState((current) => ({ ...current, [section]: { ...current[section], loading: false } })));
   }
 
   return (
