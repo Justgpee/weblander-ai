@@ -12,6 +12,7 @@ const SECTIONS: EditableSection[] = ["headline", "description", "features", "cal
 /** Coordinates studio request identities and only finalizes state for current requests. */
 export function createStudioRequestCoordinator() {
   const generationGuard = createRequestIdentityGuard();
+  const heroImageGuard = createRequestIdentityGuard();
   const sectionGuards = {
     headline: createRequestIdentityGuard(),
     description: createRequestIdentityGuard(),
@@ -23,12 +24,17 @@ export function createStudioRequestCoordinator() {
   let projectRevision = 0;
   let generationRevision = 0;
   let briefRevision = 0;
+  let heroImageInFlight = false;
 
   function generationContextKey(projectId: string | null) {
     return `${projectRevision}:${generationRevision}:${projectId ?? "draft"}`;
   }
 
   function sectionContextKey(projectId: string | null) {
+    return `${projectRevision}:${briefRevision}:${projectId ?? "draft"}`;
+  }
+
+  function heroImageContextKey(projectId: string | null) {
     return `${projectRevision}:${briefRevision}:${projectId ?? "draft"}`;
   }
 
@@ -46,6 +52,12 @@ export function createStudioRequestCoordinator() {
     onReset?.();
   }
 
+  function invalidateHeroImage(onReset?: () => void) {
+    heroImageGuard.invalidate();
+    heroImageInFlight = false;
+    onReset?.();
+  }
+
   function isSectionRevisionCurrent(ticket: SectionRequestTicket) {
     return sectionRevisions[ticket.section] === ticket.revision;
   }
@@ -53,12 +65,39 @@ export function createStudioRequestCoordinator() {
   return {
     generationContextKey,
     sectionContextKey,
+    heroImageContextKey,
     beginGeneration(projectId: string | null) {
       return generationGuard.begin(generationContextKey(projectId));
     },
     isGenerationCurrent(identity: RequestIdentity, context: string) {
       return generationGuard.isCurrent(identity, context);
     },
+    beginHeroImage(projectId: string | null): RequestIdentity | null {
+      if (heroImageInFlight) return null;
+      heroImageInFlight = true;
+      return heroImageGuard.begin(heroImageContextKey(projectId));
+    },
+    isHeroImageCurrent(identity: RequestIdentity, context: string) {
+      return heroImageGuard.isCurrent(identity, context);
+    },
+    async runHeroImage<T>(
+      identity: RequestIdentity,
+      getContext: () => string,
+      request: () => Promise<T>,
+      onSuccess: (value: T) => void,
+      onFailure: (error: unknown) => void,
+      onFinally: () => void,
+    ) {
+      try {
+        await settleRequestWithIdentity(request, heroImageGuard, identity, getContext, onSuccess, onFailure);
+      } finally {
+        if (heroImageGuard.isCurrent(identity, getContext())) {
+          heroImageInFlight = false;
+          onFinally();
+        }
+      }
+    },
+    invalidateHeroImage,
     async runGeneration<T>(
       identity: RequestIdentity,
       getContext: () => string,
@@ -115,16 +154,18 @@ export function createStudioRequestCoordinator() {
         }
       }
     },
-    projectTransition(onGenerationInvalidated?: () => void, onSectionsReset?: () => void) {
+    projectTransition(onGenerationInvalidated?: () => void, onSectionsReset?: () => void, onHeroImageReset?: () => void) {
       projectRevision += 1;
       invalidateGeneration(onGenerationInvalidated);
       invalidateSections(onSectionsReset);
+      invalidateHeroImage(onHeroImageReset);
     },
-    briefChanged(onGenerationInvalidated?: () => void, onSectionsReset?: () => void) {
+    briefChanged(onGenerationInvalidated?: () => void, onSectionsReset?: () => void, onHeroImageReset?: () => void) {
       generationRevision += 1;
       briefRevision += 1;
       invalidateGeneration(onGenerationInvalidated);
       invalidateSections(onSectionsReset);
+      invalidateHeroImage(onHeroImageReset);
     },
     layoutChanged(onGenerationInvalidated?: () => void) {
       generationRevision += 1;

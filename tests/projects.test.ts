@@ -5,6 +5,7 @@ import {
   ProjectCollectionSchema,
   ProjectCollectionV1Schema,
   ProjectCollectionV2Schema,
+  ProjectCollectionV3Schema,
   ProjectRecordSchema,
   ProjectStorageError,
   createProjectStorage,
@@ -41,6 +42,7 @@ const page = {
   features: ["A thoughtful identity for your next chapter", "Clear direction for meaningful growth"],
   callToAction: "Talk with our team",
 };
+const heroImage = { mimeType: "image/webp" as const, base64: Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]).toString("base64") };
 
 function setup() {
   const storage = new MemoryStorage();
@@ -59,11 +61,14 @@ describe("persisted project schemas", () => {
     const { projects } = setup();
     const saved = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     expect(ProjectRecordSchema.safeParse(saved).success).toBe(true);
-    expect(ProjectCollectionSchema.safeParse({ version: 3, projects: [saved] }).success).toBe(true);
-    expect(ProjectCollectionV2Schema.safeParse({ version: 2, projects: [{ ...saved, siteSettings: { navigation: saved.siteSettings.navigation, ctaDestination: saved.siteSettings.ctaDestination } }] }).success).toBe(true);
+    expect(ProjectCollectionSchema.safeParse({ version: 4, projects: [saved] }).success).toBe(true);
+    const v2Record = { ...saved, siteSettings: { navigation: saved.siteSettings.navigation, ctaDestination: saved.siteSettings.ctaDestination } } as Record<string, unknown>;
+    delete v2Record.heroImage;
+    expect(ProjectCollectionV2Schema.safeParse({ version: 2, projects: [v2Record] }).success).toBe(true);
     expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [saved] }).success).toBe(false);
     const legacyRecord = { ...saved } as Record<string, unknown>;
     delete legacyRecord.siteSettings;
+    delete legacyRecord.heroImage;
     expect(ProjectCollectionV1Schema.safeParse({ version: 1, projects: [legacyRecord] }).success).toBe(true);
     expect(ProjectCollectionSchema.safeParse({ version: 3, projects: [saved, saved] }).success).toBe(false);
     expect(ProjectRecordSchema.safeParse({ ...saved, id: "not-a-uuid" }).success).toBe(false);
@@ -93,6 +98,7 @@ describe("local project storage", () => {
       content: { ...first.content, description: "An independently edited website description for the saved project." },
       layout: "editorial",
       siteSettings: first.siteSettings,
+      heroImage: first.heroImage,
     }, first.revision);
     expect(saved.revision).toBe(2);
     expect(saved.createdAt).toBe(first.createdAt);
@@ -123,7 +129,7 @@ describe("local project storage", () => {
         typography: "editorial-serif",
       },
     };
-    const snapshot = projectSnapshotFromPage(brief, page, "split", siteSettings);
+    const snapshot = projectSnapshotFromPage(brief, page, "split", siteSettings, heroImage);
     const saved = projects.create("Northline", snapshot);
     const reopened = pageFromProject(projects.load(saved.id));
     expect(reopened).toMatchObject({
@@ -140,6 +146,7 @@ describe("local project storage", () => {
     expect(saved.content.callToAction).toBe(page.callToAction);
     expect(JSON.parse(storage.value ?? "{}").projects[0].layout).toBe("split");
     expect(projects.load(saved.id).siteSettings).toEqual(siteSettings);
+    expect(projects.load(saved.id).heroImage).toEqual(heroImage);
   });
 
   it("keeps updated timestamps increasing when the injected clock has the same time", () => {
@@ -193,11 +200,12 @@ describe("local project storage", () => {
     expect(storage.writes).toBe(writesBeforeMalformedV2);
   });
 
-  it("migrates fully validated v1 records in memory and writes v3 on the next successful mutation", () => {
+  it("migrates fully validated v1 records in memory and writes v4 on the next successful mutation", () => {
     const { storage, projects } = setup();
     const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     const v1Record = { ...original } as Record<string, unknown>;
     delete v1Record.siteSettings;
+    delete v1Record.heroImage;
     const oldData = { version: 1, projects: [{ ...v1Record, revision: 7, name: "Legacy name" }] };
     storage.value = JSON.stringify(oldData);
     const writesBeforeRead = storage.writes;
@@ -213,17 +221,19 @@ describe("local project storage", () => {
       updatedAt: original.updatedAt,
       revision: 7,
       siteSettings: DEFAULT_SITE_SETTINGS,
+      heroImage: null,
     });
     expect(storage.writes).toBe(writesBeforeRead);
     const saved = projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
     expect(saved.revision).toBe(8);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(3);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(4);
   });
 
   it("migrates v2 settings without changing project data and adds default appearance in memory", () => {
     const { storage, projects } = setup();
     const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
-    const v2 = { ...original, siteSettings: { navigation: original.siteSettings.navigation, ctaDestination: "https://example.com/contact" } };
+    const v2 = { ...original, heroImage: undefined, siteSettings: { navigation: original.siteSettings.navigation, ctaDestination: "https://example.com/contact" } };
+    delete (v2 as { heroImage?: unknown }).heroImage;
     storage.value = JSON.stringify({ version: 2, projects: [v2] });
     const writesBeforeRead = storage.writes;
     const loaded = projects.load(original.id);
@@ -232,15 +242,34 @@ describe("local project storage", () => {
       layout: original.layout, createdAt: original.createdAt, updatedAt: original.updatedAt,
       revision: original.revision,
       siteSettings: { ...v2.siteSettings, appearance: DEFAULT_SITE_SETTINGS.appearance },
+      heroImage: null,
     });
     expect(storage.writes).toBe(writesBeforeRead);
     projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(3);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(4);
+  });
+
+  it("migrates validated v3 projects to v4 without writes and preserves their settings and revisions", () => {
+    const { storage, projects } = setup();
+    const original = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
+    const v3Record = { ...original } as Record<string, unknown>;
+    delete v3Record.heroImage;
+    storage.value = JSON.stringify({ version: 3, projects: [{ ...v3Record, revision: 11 }] });
+    const writesBeforeRead = storage.writes;
+    const loaded = projects.load(original.id);
+    expect(loaded).toMatchObject({
+      id: original.id, name: original.name, brief: original.brief, content: original.content,
+      layout: original.layout, siteSettings: original.siteSettings, createdAt: original.createdAt,
+      updatedAt: original.updatedAt, revision: 11, heroImage: null,
+    });
+    expect(storage.writes).toBe(writesBeforeRead);
+    projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings, loaded.heroImage), loaded.revision);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(4);
   });
 
   it("never rewrites malformed or unsupported future collection versions", () => {
     const { storage, projects } = setup();
-    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 4, projects: [] }]) {
+    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 5, projects: [] }]) {
       storage.value = JSON.stringify(value);
       const before = storage.value;
       const writes = storage.writes;
@@ -273,5 +302,16 @@ describe("local project storage", () => {
     expect(() => failedWriteProjects.create("Northline", projectSnapshotFromPage(brief, page, "editorial")))
       .toThrowError("Project storage is unavailable in this browser.");
     expect(failedWrite.value).toBeNull();
+  });
+
+  it("keeps existing records intact when saving an image exceeds browser storage quota", () => {
+    const { storage, projects } = setup();
+    const saved = projects.create("Northline", projectSnapshotFromPage(brief, page, "editorial"));
+    const beforeFailure = storage.value;
+    storage.failWrite = Object.assign(new Error("private quota detail"), { name: "QuotaExceededError" });
+    expect(() => projects.save(saved.id, projectSnapshotFromPage(brief, page, "editorial", saved.siteSettings, heroImage), saved.revision))
+      .toThrowError("There is not enough browser storage space to save this project.");
+    expect(storage.value).toBe(beforeFailure);
+    expect(projects.load(saved.id).heroImage).toBeNull();
   });
 });

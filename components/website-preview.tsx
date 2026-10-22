@@ -5,6 +5,7 @@ import { SiteDestinationSchema, SiteNavigationEntrySchema } from "@/lib/site-set
 import { AppearanceEditor } from "@/components/appearance-editor";
 import type { Appearance } from "@/lib/site-settings";
 import type { VisualStyle } from "@/lib/generation";
+import type { HeroImageAsset } from "@/lib/site-image";
 
 type WebsitePreviewProps = {
   page: GeneratedPage | null;
@@ -20,9 +21,13 @@ type WebsitePreviewProps = {
   style: VisualStyle;
   appearance: Appearance;
   onAppearanceChange: (appearance: Appearance) => void;
+  heroImage: HeroImageAsset | null;
+  heroImageState: { loading: boolean; error: string };
+  onGenerateHeroImage: () => void;
+  onRemoveHeroImage: () => void;
 };
 
-export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange, onCtaDestinationChange, loading, onLayoutChange, sectionState, onEdit, onRegenerate, style, appearance, onAppearanceChange }: WebsitePreviewProps) {
+export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange, onCtaDestinationChange, loading, onLayoutChange, sectionState, onEdit, onRegenerate, style, appearance, onAppearanceChange, heroImage, heroImageState, onGenerateHeroImage, onRemoveHeroImage }: WebsitePreviewProps) {
   return (
     <section className="preview-column" aria-label="Website preview">
       <div className="preview-header"><div><div className="section-kicker">THE FIRST LOOK</div><h2>Your live preview</h2></div><div className="viewport-switch" aria-label="Preview layout"><button type="button" className={layout === "editorial" ? "active" : ""} aria-pressed={layout === "editorial"} onClick={() => onLayoutChange("editorial")} title="Editorial layout"><span>▤</span></button><button type="button" className={layout === "split" ? "active" : ""} aria-pressed={layout === "split"} onClick={() => onLayoutChange("split")} title="Split layout"><span>▥</span></button></div></div>
@@ -59,9 +64,18 @@ export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange
         </div>
       </details>
       <AppearanceEditor style={style} appearance={appearance} onChange={onAppearanceChange} />
+      <div className="hero-image-controls" aria-label="Hero image controls">
+        <div><strong>Website hero image</strong><span>{heroImage ? "Saved with this project and included in HTML export." : "Optional image. The illustrated artwork remains as a fallback."}</span></div>
+        <button type="button" onClick={onGenerateHeroImage} disabled={!page || heroImageState.loading} aria-busy={heroImageState.loading}>
+          {heroImageState.loading ? "Generating image…" : heroImage ? "Regenerate image" : "Generate image"}
+        </button>
+        {heroImage && <button type="button" onClick={onRemoveHeroImage} disabled={heroImageState.loading}>Remove image</button>}
+        {heroImageState.error && <span className="hero-image-error" role="alert">{heroImageState.error}</span>}
+        <span className="sr-only" aria-live="polite">{heroImageState.loading ? "Generating hero image" : ""}</span>
+      </div>
       <div className={`browser-frame ${loading ? "is-loading" : ""}`}>
         <div className="browser-bar"><div className="browser-dots"><i/><i/><i/></div><div className="address-bar"><span>⌑</span> yourbrand.com</div><span className="browser-more">···</span></div>
-        {loading ? <div className="preview-loading"><div className="loading-orbit">✦</div><strong>Bringing your idea to life</strong><span>Putting the finishing touches on your page…</span><div className="loading-track"><i /></div></div> : page ? <GeneratedPreview page={page} siteSettings={siteSettings} /> : <EmptyPreview />}
+        {loading ? <div className="preview-loading"><div className="loading-orbit">✦</div><strong>Bringing your idea to life</strong><span>Putting the finishing touches on your page…</span><div className="loading-track"><i /></div></div> : page ? <GeneratedPreview page={page} siteSettings={siteSettings} heroImage={heroImage} /> : <EmptyPreview />}
       </div>
       <div className="preview-caption"><span><i/> {page ? "PREVIEW UPDATED" : "PREVIEW AREA"}</span><span>{page ? page.style.toUpperCase() + " DIRECTION" : "YOUR SITE WILL APPEAR HERE"}</span></div>
     </section>
@@ -81,6 +95,6 @@ function EmptyPreview() {
   return <div className="empty-preview"><div className="empty-art"><div className="art-sun"/><div className="art-hill hill-back"/><div className="art-hill hill-front"/><div className="art-card"><span/><span/><span/></div></div><div className="empty-copy"><span className="preview-kicker">A FRESH CANVAS</span><h3>Your next great<br/>first impression.</h3><p>Fill in your business brief and we’ll bring a landing page concept to life.</p></div><div className="empty-footer"><span>Thoughtfully made for you</span><span>✦</span></div></div>;
 }
 
-function GeneratedPreview({ page, siteSettings }: { page: GeneratedPage; siteSettings: SiteSettings }) {
-  return <GeneratedWebsite page={page} siteSettings={siteSettings} />;
+function GeneratedPreview({ page, siteSettings, heroImage }: { page: GeneratedPage; siteSettings: SiteSettings; heroImage: HeroImageAsset | null }) {
+  return <GeneratedWebsite page={page} siteSettings={siteSettings} heroImage={heroImage} />;
 }

@@ -9,6 +9,7 @@ const page: GeneratedPage = {
   subheadline: "Thoughtful identity and digital design for independent teams ready to grow.",
   features: ["A focused identity system for your next chapter", "Clear direction for meaningful growth"], layout: "editorial",
 };
+const heroImage = { mimeType: "image/webp" as const, base64: Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]).toString("base64") };
 
 describe("standalone website export", () => {
   it("renders each validated layout and visual style", () => {
@@ -159,6 +160,34 @@ describe("standalone website export", () => {
       ...DEFAULT_SITE_SETTINGS,
       navigation: [{ label: "Bad", destination: "javascript:alert(1)" }, ...DEFAULT_SITE_SETTINGS.navigation.slice(1)],
     } as never)).toThrow();
+  });
+
+  it("renders the same embedded decorative image in both layouts and exports offline with a narrow CSP allowance", () => {
+    for (const layout of ["editorial", "split"] as const) {
+      const currentPage = { ...page, layout };
+      const preview = renderGeneratedWebsite(currentPage, DEFAULT_SITE_SETTINGS, heroImage);
+      const { html } = createWebsiteExport(currentPage, layout, DEFAULT_SITE_SETTINGS, heroImage);
+      const imageMarkup = `<img class="site-hero-image" src="data:image/webp;base64,${heroImage.base64}" alt="" />`;
+      expect(preview).toContain(imageMarkup);
+      expect(html).toContain(imageMarkup);
+      expect(html).toContain("img-src data:");
+      expect(html).not.toMatch(/https?:\/\//);
+      expect(html).not.toMatch(/<(?:script|link)\b/i);
+      expect(html).toContain(`site-mock professional ${layout}`);
+    }
+  });
+
+  it("retains CSS illustration fallback and does not widen export CSP when the image is absent", () => {
+    const { html } = createWebsiteExport(page, "editorial");
+    expect(renderGeneratedWebsite(page)).toContain('<div class="site-arch">');
+    expect(html).toContain('<div class="site-arch">');
+    expect(html).not.toContain("img-src data:");
+  });
+
+  it("rejects invalid image data rather than placing it into preview or export markup", () => {
+    const malformed = { mimeType: "image/svg+xml", base64: "PHN2Zz4=" } as never;
+    expect(() => renderGeneratedWebsite(page, DEFAULT_SITE_SETTINGS, malformed)).toThrow();
+    expect(() => createWebsiteExport(page, "editorial", DEFAULT_SITE_SETTINGS, malformed)).toThrow();
   });
 
   it("keeps the preview renderable while the user temporarily edits a field below its final minimum", () => {

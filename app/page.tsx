@@ -21,12 +21,15 @@ import { createWebsiteExport } from "@/lib/website-export";
 import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteSettings } from "@/lib/site-settings";
 import { createEmptySectionRequestState, type SectionRequestState } from "@/lib/section-request-state";
 import { createStudioRequestCoordinator } from "@/lib/studio-request-coordinator";
+import { HeroImageAssetSchema, type HeroImageAsset } from "@/lib/site-image";
 
 export default function Home() {
   const [brief, setBrief] = useState<BusinessBrief>(EMPTY_BRIEF);
   const [page, setPage] = useState<GeneratedPage | null>(null);
   const [layout, setLayout] = useState<GeneratedPage["layout"]>("editorial");
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
+  const [heroImage, setHeroImage] = useState<HeroImageAsset | null>(null);
+  const [heroImageState, setHeroImageState] = useState({ loading: false, error: "" });
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [sectionState, setSectionState] = useState<SectionRequestState>(createEmptySectionRequestState);
@@ -56,6 +59,10 @@ export default function Home() {
 
   function sectionContextKey() {
     return requestCoordinator.sectionContextKey(activeProjectIdRef.current);
+  }
+
+  function heroImageContextKey() {
+    return requestCoordinator.heroImageContextKey(activeProjectIdRef.current);
   }
 
   const getProjectStorage = useCallback(() => {
@@ -121,6 +128,7 @@ export default function Home() {
     requestCoordinator.projectTransition(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
+      () => setHeroImageState({ loading: false, error: "" }),
     );
     advanceDirtyRevision();
     activeProjectIdRef.current = null;
@@ -132,6 +140,7 @@ export default function Home() {
     setPage(null);
     setLayout("editorial");
     setSiteSettings(DEFAULT_SITE_SETTINGS);
+    setHeroImage(null);
     markClean();
     setSaveStatus("idle");
     setNotice("");
@@ -142,6 +151,7 @@ export default function Home() {
     requestCoordinator.projectTransition(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
+      () => setHeroImageState({ loading: false, error: "" }),
     );
     advanceDirtyRevision();
     activeProjectIdRef.current = project.id;
@@ -153,6 +163,7 @@ export default function Home() {
     setPage(pageFromProject(project));
     setLayout(project.layout);
     setSiteSettings(SiteSettingsSchema.parse(project.siteSettings));
+    setHeroImage(HeroImageAssetSchema.parse(project.heroImage));
     markClean();
     setSaveStatus("saved");
     setNotice("");
@@ -208,7 +219,7 @@ export default function Home() {
         setProjectStorageError(contrast.issues.join(" "));
         return false;
       }
-      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
+      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImage);
       const storage = getProjectStorage();
       const creatingProject = activeProjectIdRef.current === null;
       const saved = activeProjectIdRef.current
@@ -218,6 +229,7 @@ export default function Home() {
         requestCoordinator.projectTransition(
           () => setLoading(false),
           () => setSectionState(createEmptySectionRequestState()),
+          () => setHeroImageState({ loading: false, error: "" }),
         );
       }
       activeProjectIdRef.current = saved.id;
@@ -307,7 +319,7 @@ export default function Home() {
   function downloadWebsite(destination: string) {
     if (!page) return;
     const settings = SiteSettingsSchema.parse({ ...siteSettings, ctaDestination: destination });
-    const exported = createWebsiteExport(page, layout, settings);
+    const exported = createWebsiteExport(page, layout, settings, heroImage);
     const blob = new Blob([exported.html], { type: "text/html;charset=utf-8" });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -335,7 +347,7 @@ export default function Home() {
           setProjectStorageError(contrast.issues.join(" "));
           return;
         }
-        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings);
+        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImage);
         const saved = getProjectStorage().save(projectId, snapshot, expectedRevision);
         if (dirtyRevisionRef.current !== version || activeProjectIdRef.current !== projectId) return;
         activeProjectRevisionRef.current = saved.revision;
@@ -352,12 +364,13 @@ export default function Home() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage, siteSettings]);
+  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, heroImage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage, siteSettings]);
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
     requestCoordinator.briefChanged(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
+      () => setHeroImageState({ loading: false, error: "" }),
     );
     setBrief((current) => ({ ...current, [key]: value }));
     if (key === "style") {
@@ -512,6 +525,54 @@ export default function Home() {
     }, () => setSectionState((current) => ({ ...current, [section]: { ...current[section], loading: false } })));
   }
 
+  async function generateHeroImage() {
+    if (!page) return;
+    const projectId = activeProjectIdRef.current;
+    const requestBrief = brief;
+    const identity = requestCoordinator.beginHeroImage(projectId);
+    if (!identity) return;
+    const isCurrent = () => requestCoordinator.isHeroImageCurrent(identity, heroImageContextKey()) && activeProjectIdRef.current === projectId;
+    setHeroImageState({ loading: true, error: "" });
+    await requestCoordinator.runHeroImage(identity, heroImageContextKey, async () => {
+      const response = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief: requestBrief }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok || typeof result !== "object" || result === null || !("data" in result)) {
+        const code = typeof result === "object" && result !== null && "error" in result && typeof result.error === "object" && result.error !== null && "code" in result.error && typeof result.error.code === "string"
+          ? result.error.code
+          : "";
+        throw new Error(code === "IMAGE_GENERATION_NOT_CONFIGURED"
+          ? "Image generation is not configured on this server."
+          : code === "INVALID_IMAGE_GENERATION"
+            ? "The image service returned invalid content. Please try again."
+            : "We couldn’t generate a hero image. Please try again.");
+      }
+      const parsed = HeroImageAssetSchema.safeParse(result.data);
+      if (!parsed.success) throw new Error("The image service returned invalid content. Please try again.");
+      return parsed.data;
+    }, (image) => {
+      if (!isCurrent()) return;
+      setHeroImage(image);
+      markDirty();
+    }, (error) => {
+      if (!isCurrent()) return;
+      const message = error instanceof Error && [
+        "Image generation is not configured on this server.",
+        "The image service returned invalid content. Please try again.",
+      ].includes(error.message) ? error.message : "We couldn’t generate a hero image. Please try again.";
+      setHeroImageState({ loading: true, error: message });
+    }, () => setHeroImageState((current) => ({ ...current, loading: false })));
+  }
+
+  function removeHeroImage() {
+    setHeroImage(null);
+    setHeroImageState({ loading: false, error: "" });
+    markDirty();
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
@@ -534,7 +595,7 @@ export default function Home() {
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
           <div className="studio-grid" id="brief">
             <BriefForm brief={brief} onChange={updateBrief} onSubmit={submit} loading={loading} />
-          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} />
+          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} heroImage={heroImage} heroImageState={heroImageState} onGenerateHeroImage={generateHeroImage} onRemoveHeroImage={removeHeroImage} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
           <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>

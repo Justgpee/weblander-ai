@@ -297,4 +297,84 @@ describe("studio request coordinator", () => {
     expect(features).not.toBeNull();
     expect(coordinator.beginSection("headline", "project-a")).toBeNull();
   });
+
+  it("blocks duplicate hero-image requests and isolates late completion after a project transition", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const oldResult = deferred<string>();
+    const newResult = deferred<string>();
+    let projectId: string | null = "project-a";
+    let image = "project-a image";
+    let state = { loading: true, error: "" };
+    const oldIdentity = coordinator.beginHeroImage(projectId)!;
+    expect(coordinator.beginHeroImage(projectId)).toBeNull();
+    const oldRun = coordinator.runHeroImage(
+      oldIdentity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => oldResult.promise,
+      (value) => { image = value; },
+      () => { state.error = "stale error"; },
+      () => { state.loading = false; },
+    );
+
+    coordinator.projectTransition(undefined, undefined, () => { state = { loading: false, error: "" }; });
+    projectId = "project-b";
+    image = "project-b image";
+    const newIdentity = coordinator.beginHeroImage(projectId)!;
+    state = { loading: true, error: "" };
+    const newRun = coordinator.runHeroImage(
+      newIdentity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => newResult.promise,
+      (value) => { image = value; },
+      () => { state.error = "new error"; },
+      () => { state.loading = false; },
+    );
+
+    oldResult.resolve("stale project-a image");
+    await oldRun;
+    expect(image).toBe("project-b image");
+    expect(state).toEqual({ loading: true, error: "" });
+    expect(coordinator.beginHeroImage(projectId)).toBeNull();
+
+    newResult.resolve("project-b generated image");
+    await newRun;
+    expect(image).toBe("project-b generated image");
+    expect(state).toEqual({ loading: false, error: "" });
+  });
+
+  it("ignores hero-image success and failure after a business brief or style change", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const successResult = deferred<string>();
+    const failureResult = deferred<string>();
+    const projectId = "project-a";
+    let image = "existing image";
+    let state = { loading: false, error: "" };
+    const successIdentity = coordinator.beginHeroImage(projectId)!;
+    const successRun = coordinator.runHeroImage(
+      successIdentity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => successResult.promise,
+      (value) => { image = value; },
+      () => { state.error = "stale success request failed"; },
+      () => { state.loading = false; },
+    );
+    coordinator.briefChanged(undefined, undefined, () => { state = { loading: false, error: "" }; });
+    const failureIdentity = coordinator.beginHeroImage(projectId)!;
+    state = { loading: true, error: "" };
+    const failureRun = coordinator.runHeroImage(
+      failureIdentity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => failureResult.promise,
+      (value) => { image = value; },
+      () => { state.error = "stale failure"; },
+      () => { state.loading = false; },
+    );
+    coordinator.briefChanged(undefined, undefined, () => { state = { loading: false, error: "" }; });
+
+    successResult.resolve("old brief image");
+    failureResult.reject(new Error("old style failure"));
+    await Promise.all([successRun, failureRun]);
+    expect(image).toBe("existing image");
+    expect(state).toEqual({ loading: false, error: "" });
+  });
 });

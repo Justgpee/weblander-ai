@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BusinessBriefSchema, type BusinessBrief } from "@/lib/generation";
+import { HeroImageAssetSchema, type HeroImageAsset } from "@/lib/site-image";
 import {
   DEFAULT_APPEARANCE,
   DEFAULT_SITE_SETTINGS,
@@ -10,7 +11,7 @@ import {
 } from "@/lib/site-settings";
 
 export const PROJECT_STORAGE_KEY = "weblander-ai:projects";
-export const PROJECT_COLLECTION_VERSION = 3;
+export const PROJECT_COLLECTION_VERSION = 4;
 
 export const ProjectIdSchema = z.string().uuid();
 export const ProjectNameSchema = z.string().trim().min(1).max(80);
@@ -29,6 +30,7 @@ const ProjectSnapshotBaseSchema = z.object({
   content: ProjectPageContentSchema,
   layout: ProjectLayoutSchema,
   siteSettings: SiteSettingsSchema,
+  heroImage: HeroImageAssetSchema.nullable(),
 }).strict();
 export const ProjectSnapshotSchema = ProjectSnapshotBaseSchema.superRefine((snapshot, context) => {
   const contrast = validateAppearanceContrast(snapshot.brief.style, snapshot.siteSettings.appearance);
@@ -59,8 +61,9 @@ function withProjectTimeValidation<T extends z.ZodRawShape>(shape: T) {
 
 export const ProjectRecordV1Schema = withProjectTimeValidation(ProjectRecordFields);
 export const ProjectRecordV2Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsV2Schema });
-const ProjectRecordV3BaseSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
-export const ProjectRecordSchema = ProjectRecordV3BaseSchema.superRefine((project, context) => {
+export const ProjectRecordV3Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
+const ProjectRecordV4BaseSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema, heroImage: HeroImageAssetSchema.nullable() });
+export const ProjectRecordSchema = ProjectRecordV4BaseSchema.superRefine((project, context) => {
   const contrast = validateAppearanceContrast(project.brief.style, project.siteSettings.appearance);
   if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
 });
@@ -74,6 +77,11 @@ export const ProjectCollectionV1Schema = z.object({
 export const ProjectCollectionV2Schema = z.object({
   version: z.literal(2),
   projects: z.array(ProjectRecordV2Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+export const ProjectCollectionV3Schema = z.object({
+  version: z.literal(3),
+  projects: z.array(ProjectRecordV3Schema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
 
 export const ProjectCollectionSchema = z.object({
@@ -154,14 +162,22 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
         projects: version2.data.projects.map((project) => ({
           ...project,
           siteSettings: { ...project.siteSettings, appearance: DEFAULT_APPEARANCE },
+          heroImage: null,
         })),
+      };
+    }
+    const version3 = ProjectCollectionV3Schema.safeParse(value);
+    if (version3.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version3.data.projects.map((project) => ({ ...project, heroImage: null })),
       };
     }
     const legacy = ProjectCollectionV1Schema.safeParse(value);
     if (legacy.success) {
       return {
         version: PROJECT_COLLECTION_VERSION,
-        projects: legacy.data.projects.map((project) => ({ ...project, siteSettings: DEFAULT_SITE_SETTINGS })),
+        projects: legacy.data.projects.map((project) => ({ ...project, siteSettings: DEFAULT_SITE_SETTINGS, heroImage: null })),
       };
     }
     throw new ProjectStorageError("CORRUPT");
@@ -275,7 +291,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
   subheadline: string;
   features: string[];
   callToAction: string;
-}, layout: "editorial" | "split", siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS): ProjectSnapshot {
+}, layout: "editorial" | "split", siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS, heroImage: HeroImageAsset | null = null): ProjectSnapshot {
   return ProjectSnapshotSchema.parse({
     brief,
     content: {
@@ -286,6 +302,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
     },
     layout,
     siteSettings,
+    heroImage,
   });
 }
 
