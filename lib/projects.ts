@@ -2,6 +2,13 @@ import { z } from "zod";
 import { BusinessBriefSchema, type BusinessBrief } from "@/lib/generation";
 import { HeroImageAssetSchema, type HeroImageAsset } from "@/lib/site-image";
 import {
+  DEFAULT_SITE_TEMPLATE,
+  SiteTemplateSchema,
+  SiteTemplateV6Schema,
+  SiteTemplateV5Schema,
+  type SiteTemplate,
+} from "@/lib/site-templates";
+import {
   DEFAULT_APPEARANCE,
   DEFAULT_SITE_SETTINGS,
   SiteSettingsSchema,
@@ -11,7 +18,7 @@ import {
 } from "@/lib/site-settings";
 
 export const PROJECT_STORAGE_KEY = "weblander-ai:projects";
-export const PROJECT_COLLECTION_VERSION = 4;
+export const PROJECT_COLLECTION_VERSION = 7;
 
 export const ProjectIdSchema = z.string().uuid();
 export const ProjectNameSchema = z.string().trim().min(1).max(80);
@@ -31,6 +38,7 @@ const ProjectSnapshotBaseSchema = z.object({
   layout: ProjectLayoutSchema,
   siteSettings: SiteSettingsSchema,
   heroImage: HeroImageAssetSchema.nullable(),
+  template: SiteTemplateSchema.default(DEFAULT_SITE_TEMPLATE),
 }).strict();
 export const ProjectSnapshotSchema = ProjectSnapshotBaseSchema.superRefine((snapshot, context) => {
   const contrast = validateAppearanceContrast(snapshot.brief.style, snapshot.siteSettings.appearance);
@@ -62,11 +70,26 @@ function withProjectTimeValidation<T extends z.ZodRawShape>(shape: T) {
 export const ProjectRecordV1Schema = withProjectTimeValidation(ProjectRecordFields);
 export const ProjectRecordV2Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsV2Schema });
 export const ProjectRecordV3Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema });
-const ProjectRecordV4BaseSchema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsSchema, heroImage: HeroImageAssetSchema.nullable() });
-export const ProjectRecordSchema = ProjectRecordV4BaseSchema.superRefine((project, context) => {
-  const contrast = validateAppearanceContrast(project.brief.style, project.siteSettings.appearance);
-  if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
-});
+const ProjectRecordV4Fields = { ...ProjectRecordFields, siteSettings: SiteSettingsSchema, heroImage: HeroImageAssetSchema.nullable() };
+function validateProjectAppearance<T extends { brief: BusinessBrief; siteSettings: SiteSettings }>(schema: z.ZodType<T>) {
+  return schema.superRefine((project, context) => {
+    const contrast = validateAppearanceContrast(project.brief.style, project.siteSettings.appearance);
+    if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
+  });
+}
+export const ProjectRecordV4Schema = validateProjectAppearance(withProjectTimeValidation(ProjectRecordV4Fields));
+export const ProjectRecordV5Schema = validateProjectAppearance(withProjectTimeValidation({
+  ...ProjectRecordV4Fields,
+  template: SiteTemplateV5Schema,
+}));
+export const ProjectRecordV6Schema = validateProjectAppearance(withProjectTimeValidation({
+  ...ProjectRecordV4Fields,
+  template: SiteTemplateV6Schema,
+}));
+export const ProjectRecordSchema = validateProjectAppearance(withProjectTimeValidation({
+  ...ProjectRecordV4Fields,
+  template: SiteTemplateSchema,
+}));
 export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 export const ProjectCollectionV1Schema = z.object({
@@ -84,10 +107,26 @@ export const ProjectCollectionV3Schema = z.object({
   projects: z.array(ProjectRecordV3Schema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
 
-export const ProjectCollectionSchema = z.object({
+export const ProjectCollectionV4Schema = z.object({
+  version: z.literal(4),
+  projects: z.array(ProjectRecordV4Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+export const ProjectCollectionV5Schema = z.object({
+  version: z.literal(5),
+  projects: z.array(ProjectRecordV5Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+export const ProjectCollectionV6Schema = z.object({
+  version: z.literal(6),
+  projects: z.array(ProjectRecordV6Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+
+export const ProjectCollectionV7Schema = z.object({
   version: z.literal(PROJECT_COLLECTION_VERSION),
   projects: z.array(ProjectRecordSchema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+export const ProjectCollectionSchema = ProjectCollectionV7Schema;
 
 function validateUniqueProjectIds(projects: Array<{ id: string }>, context: z.RefinementCtx) {
   const seenIds = new Set<string>();
@@ -155,6 +194,27 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     }
     const current = ProjectCollectionSchema.safeParse(value);
     if (current.success) return current.data;
+    const version6 = ProjectCollectionV6Schema.safeParse(value);
+    if (version6.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version6.data.projects.map((project) => ({ ...project })),
+      };
+    }
+    const version5 = ProjectCollectionV5Schema.safeParse(value);
+    if (version5.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version5.data.projects.map((project) => ({ ...project })),
+      };
+    }
+    const version4 = ProjectCollectionV4Schema.safeParse(value);
+    if (version4.success) {
+      return {
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version4.data.projects.map((project) => ({ ...project, template: DEFAULT_SITE_TEMPLATE })),
+      };
+    }
     const version2 = ProjectCollectionV2Schema.safeParse(value);
     if (version2.success) {
       return {
@@ -163,6 +223,7 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
           ...project,
           siteSettings: { ...project.siteSettings, appearance: DEFAULT_APPEARANCE },
           heroImage: null,
+          template: DEFAULT_SITE_TEMPLATE,
         })),
       };
     }
@@ -170,14 +231,14 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     if (version3.success) {
       return {
         version: PROJECT_COLLECTION_VERSION,
-        projects: version3.data.projects.map((project) => ({ ...project, heroImage: null })),
+        projects: version3.data.projects.map((project) => ({ ...project, heroImage: null, template: DEFAULT_SITE_TEMPLATE })),
       };
     }
     const legacy = ProjectCollectionV1Schema.safeParse(value);
     if (legacy.success) {
       return {
         version: PROJECT_COLLECTION_VERSION,
-        projects: legacy.data.projects.map((project) => ({ ...project, siteSettings: DEFAULT_SITE_SETTINGS, heroImage: null })),
+        projects: legacy.data.projects.map((project) => ({ ...project, siteSettings: DEFAULT_SITE_SETTINGS, heroImage: null, template: DEFAULT_SITE_TEMPLATE })),
       };
     }
     throw new ProjectStorageError("CORRUPT");
@@ -291,7 +352,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
   subheadline: string;
   features: string[];
   callToAction: string;
-}, layout: "editorial" | "split", siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS, heroImage: HeroImageAsset | null = null): ProjectSnapshot {
+}, layout: "editorial" | "split", siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS, heroImage: HeroImageAsset | null = null, template: SiteTemplate = DEFAULT_SITE_TEMPLATE): ProjectSnapshot {
   return ProjectSnapshotSchema.parse({
     brief,
     content: {
@@ -303,6 +364,7 @@ export function projectSnapshotFromPage(brief: BusinessBrief, page: {
     layout,
     siteSettings,
     heroImage,
+    template,
   });
 }
 

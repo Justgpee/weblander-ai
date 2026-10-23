@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { VisualStyleSchema, type VisualStyle } from "@/lib/generation";
 
-export const SAFE_SITE_ANCHORS = ["#top", "#site-headline"] as const;
+export const SAFE_SITE_ANCHORS = ["#top", "#site-headline", "#site-story", "#site-menu", "#site-visit", "#site-collections", "#site-brand-story", "#site-properties", "#site-agency-story"] as const;
 
 export const SITE_STYLE_PALETTES: Record<VisualStyle, { primary: string; background: string; accent: string }> = {
   Minimalist: { primary: "#283026", background: "#f1f0e9", accent: "#63745a" },
@@ -149,7 +149,7 @@ export const SiteDestinationSchema = z.string().max(2048)
   .refine((value) => !/\p{Cc}/u.test(value), "Destinations cannot contain control characters.")
   .transform((value) => value.trim())
   .refine(isSafeSiteDestination, {
-    message: "Enter an http(s) URL, #top, #site-headline, or leave the destination blank.",
+    message: "Enter an http(s) URL, a supported site section anchor, or leave the destination blank.",
   });
 
 export function validateSiteDestination(value: string): string | undefined {

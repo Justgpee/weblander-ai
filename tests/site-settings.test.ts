@@ -20,11 +20,12 @@ describe("appearance settings", () => {
     expect(SiteSettingsSchema.safeParse(DEFAULT_SITE_SETTINGS).success).toBe(true);
     expect(SiteSettingsSchema.safeParse({ ...DEFAULT_SITE_SETTINGS, navigation: DEFAULT_SITE_SETTINGS.navigation.slice(0, 2) }).success).toBe(false);
     expect(SiteSettingsSchema.safeParse({ ...DEFAULT_SITE_SETTINGS, extra: true }).success).toBe(false);
-    for (const destination of ["", "https://example.com/path?a=1&b=2", "http://localhost:3000/page", "#top", "#site-headline"]) {
+    for (const destination of ["", "https://example.com/path?a=1&b=2", "http://localhost:3000/page", "#top", "#site-headline", "#site-story", "#site-menu", "#site-visit", "#site-properties", "#site-agency-story"]) {
       expect(SiteDestinationSchema.safeParse(destination).success, destination).toBe(true);
     }
     expect(validateSiteDestination("")).toBeUndefined();
     expect(validateSiteDestination("#top")).toBe("#top");
+    expect(validateSiteDestination("#site-menu")).toBe("#site-menu");
     expect(validateSiteDestination("https://example.com")).toBe("https://example.com/");
     for (const destination of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "//example.com", "\\\\example.com", "https://user:pass@example.com", "#contact", "https://example.com/\npath", "\thttps://example.com"]) {
       expect(SiteDestinationSchema.safeParse(destination).success, destination).toBe(false);
