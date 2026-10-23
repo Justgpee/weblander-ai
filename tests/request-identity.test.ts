@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createEmptySectionRequestState } from "@/lib/section-request-state";
 import { createStudioRequestCoordinator } from "@/lib/studio-request-coordinator";
+import { heroImageForProject } from "@/lib/project-hero-image";
+import type { HeroImageAsset } from "@/lib/site-image";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -101,6 +103,72 @@ describe("studio request coordinator", () => {
     expect(notice).toBe("");
     expect(loading).toBe(false);
     expect(Object.values(sectionState).every((state) => !state.loading && state.error === "")).toBe(true);
+  });
+
+  it("does not apply a late Fashion template result to the project opened afterward", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const response = deferred<{ page: string; template: { id: "fashion"; content: { collectionHighlights: Array<{ name: string; description: string }> } } }>();
+    let projectId: string | null = "project-a";
+    let page = "project-a page";
+    let template: { id: "generic" } | { id: "fashion"; content: { collectionHighlights: Array<{ name: string; description: string }> } } = { id: "generic" };
+    const identity = coordinator.beginGeneration(projectId);
+    const run = coordinator.runGeneration(
+      identity,
+      () => coordinator.generationContextKey(projectId),
+      () => response.promise,
+      (generated) => { page = generated.page; template = generated.template; },
+      () => undefined,
+      () => undefined,
+    );
+
+    coordinator.projectTransition();
+    projectId = "project-b";
+    page = "project-b page";
+    template = { id: "generic" };
+    response.resolve({
+      page: "late Fashion page",
+      template: { id: "fashion", content: { collectionHighlights: [
+        { name: "Spring layers", description: "Lightweight themes for the season and everyday dressing." },
+        { name: "Evening edit", description: "A considered direction for after-dark looks and events." },
+      ] } },
+    });
+    await run;
+
+    expect(page).toBe("project-b page");
+    expect(template).toEqual({ id: "generic" });
+  });
+
+  it("does not apply a late Real Estate template result to the project opened afterward", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const response = deferred<{ page: string; template: { id: "real-estate"; content: { featuredProperties: Array<{ name: string; description: string }> } } }>();
+    let projectId: string | null = "project-a";
+    let page = "project-a page";
+    let template: { id: "generic" } | { id: "real-estate"; content: { featuredProperties: Array<{ name: string; description: string }> } } = { id: "generic" };
+    const identity = coordinator.beginGeneration(projectId);
+    const run = coordinator.runGeneration(
+      identity,
+      () => coordinator.generationContextKey(projectId),
+      () => response.promise,
+      (generated) => { page = generated.page; template = generated.template; },
+      () => undefined,
+      () => undefined,
+    );
+
+    coordinator.projectTransition();
+    projectId = "project-b";
+    page = "project-b page";
+    template = { id: "generic" };
+    response.resolve({
+      page: "late Real Estate page",
+      template: { id: "real-estate", content: { featuredProperties: [
+        { name: "Thoughtful city living", description: "A property concept grounded in the agency brief." },
+        { name: "Room for a new chapter", description: "A second descriptive highlight for this agency." },
+      ] } },
+    });
+    await run;
+
+    expect(page).toBe("project-b page");
+    expect(template).toEqual({ id: "generic" });
   });
 
   it("ignores a stale generation failure after starting a new draft", async () => {
@@ -376,5 +444,73 @@ describe("studio request coordinator", () => {
     await Promise.all([successRun, failureRun]);
     expect(image).toBe("existing image");
     expect(state).toEqual({ loading: false, error: "" });
+  });
+
+  it("does not let a late image response for project A replace project B's fallback or saved image", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const response = deferred<HeroImageAsset>();
+    let activeProjectId: string | null = "project-a";
+    const projectAImage: HeroImageAsset = { mimeType: "image/webp", base64: "UklGRgQAAABXRUJQ" };
+    const lateImage: HeroImageAsset = { mimeType: "image/webp", base64: "UklGRgQAAABXUlRQ" };
+    let state: { projectId: string | null; image: HeroImageAsset | null } = { projectId: "project-a", image: projectAImage };
+    const identity = coordinator.beginHeroImage(activeProjectId)!;
+    const run = coordinator.runHeroImage(
+      identity,
+      () => coordinator.heroImageContextKey(activeProjectId),
+      () => response.promise,
+      (image) => { state = { projectId: activeProjectId, image }; },
+      () => undefined,
+      () => undefined,
+    );
+
+    coordinator.projectTransition();
+    activeProjectId = "project-b";
+    state = { projectId: "project-b", image: null };
+    expect(heroImageForProject(state, activeProjectId)).toBeNull();
+
+    response.resolve(lateImage);
+    await run;
+    expect(state).toEqual({ projectId: "project-b", image: null });
+    expect(heroImageForProject(state, activeProjectId)).toBeNull();
+
+    const projectBImage: HeroImageAsset = { mimeType: "image/png", base64: "iVBORw0KGgo=" };
+    state = { projectId: "project-b", image: projectBImage };
+    expect(heroImageForProject(state, activeProjectId)).toBe(projectBImage);
+  });
+
+  it("ignores an image completion after removal and allows a newer image to remain", async () => {
+    const coordinator = createStudioRequestCoordinator();
+    const response = deferred<string>();
+    const projectId = "project-a";
+    let state = { projectId, image: "original image" as string | null };
+    const identity = coordinator.beginHeroImage(projectId)!;
+    const run = coordinator.runHeroImage(
+      identity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => response.promise,
+      (image) => { state = { projectId, image }; },
+      () => undefined,
+      () => undefined,
+    );
+
+    coordinator.invalidateHeroImage();
+    state = { projectId, image: null };
+    const newerIdentity = coordinator.beginHeroImage(projectId)!;
+    const newer = deferred<string>();
+    const newerRun = coordinator.runHeroImage(
+      newerIdentity,
+      () => coordinator.heroImageContextKey(projectId),
+      () => newer.promise,
+      (image) => { state = { projectId, image }; },
+      () => undefined,
+      () => undefined,
+    );
+    newer.resolve("newer generated image");
+    await newerRun;
+    expect(state).toEqual({ projectId, image: "newer generated image" });
+
+    response.resolve("stale generated image");
+    await run;
+    expect(state).toEqual({ projectId, image: "newer generated image" });
   });
 });

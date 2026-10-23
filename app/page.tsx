@@ -21,14 +21,19 @@ import { createWebsiteExport } from "@/lib/website-export";
 import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteSettings } from "@/lib/site-settings";
 import { createEmptySectionRequestState, type SectionRequestState } from "@/lib/section-request-state";
 import { createStudioRequestCoordinator } from "@/lib/studio-request-coordinator";
-import { HeroImageAssetSchema, type HeroImageAsset } from "@/lib/site-image";
+import { HeroImageAssetSchema } from "@/lib/site-image";
+import { heroImageForProject, type ProjectHeroImageState } from "@/lib/project-hero-image";
+import { DEFAULT_SITE_TEMPLATE, FashionSiteTemplateSchema, initializeFashionNavigation, initializeRealEstateNavigation, initializeRestaurantNavigation, RealEstateSiteTemplateSchema, RestaurantSiteTemplateSchema, type FashionContent, type RealEstateContent, type RestaurantContent, type SiteTemplate, type SiteTemplateId } from "@/lib/site-templates";
 
 export default function Home() {
   const [brief, setBrief] = useState<BusinessBrief>(EMPTY_BRIEF);
   const [page, setPage] = useState<GeneratedPage | null>(null);
   const [layout, setLayout] = useState<GeneratedPage["layout"]>("editorial");
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
-  const [heroImage, setHeroImage] = useState<HeroImageAsset | null>(null);
+  const [siteTemplate, setSiteTemplate] = useState<SiteTemplate>(DEFAULT_SITE_TEMPLATE);
+  const [restaurantEditorRevision, setRestaurantEditorRevision] = useState(0);
+  const [templateContentValid, setTemplateContentValid] = useState(true);
+  const [projectHeroImage, setProjectHeroImage] = useState<ProjectHeroImageState>({ projectId: null, image: null });
   const [heroImageState, setHeroImageState] = useState({ loading: false, error: "" });
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -36,6 +41,7 @@ export default function Home() {
   const [requestCoordinator] = useState(createStudioRequestCoordinator);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const heroImage = heroImageForProject(projectHeroImage, activeProjectId);
   const [activeProjectName, setActiveProjectName] = useState("");
   const [activeProjectRevision, setActiveProjectRevision] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
@@ -140,7 +146,10 @@ export default function Home() {
     setPage(null);
     setLayout("editorial");
     setSiteSettings(DEFAULT_SITE_SETTINGS);
-    setHeroImage(null);
+    setSiteTemplate(DEFAULT_SITE_TEMPLATE);
+    setRestaurantEditorRevision((revision) => revision + 1);
+    setTemplateContentValid(true);
+    setProjectHeroImage({ projectId: null, image: null });
     markClean();
     setSaveStatus("idle");
     setNotice("");
@@ -162,8 +171,19 @@ export default function Home() {
     setBrief(project.brief);
     setPage(pageFromProject(project));
     setLayout(project.layout);
-    setSiteSettings(SiteSettingsSchema.parse(project.siteSettings));
-    setHeroImage(HeroImageAssetSchema.parse(project.heroImage));
+    const savedSettings = SiteSettingsSchema.parse(project.siteSettings);
+    const savedTemplate = project.template;
+    setSiteSettings(savedTemplate.id === "restaurant"
+      ? initializeRestaurantNavigation(savedSettings, savedTemplate.content)
+      : savedTemplate.id === "fashion"
+        ? initializeFashionNavigation(savedSettings, savedTemplate.content)
+        : savedTemplate.id === "real-estate"
+          ? initializeRealEstateNavigation(savedSettings, savedTemplate.content)
+          : savedSettings);
+    setSiteTemplate(savedTemplate);
+    setRestaurantEditorRevision((revision) => revision + 1);
+    setTemplateContentValid(true);
+    setProjectHeroImage({ projectId: project.id, image: HeroImageAssetSchema.parse(project.heroImage) });
     markClean();
     setSaveStatus("saved");
     setNotice("");
@@ -208,6 +228,11 @@ export default function Home() {
   }
 
   function saveCurrentProject() {
+    if (!templateContentValid) {
+      setSaveStatus("error");
+      setProjectStorageError("Correct the template content fields before saving this project.");
+      return false;
+    }
     if (!page) {
       setProjectStorageError("Generate a website before saving a project.");
       return false;
@@ -219,7 +244,7 @@ export default function Home() {
         setProjectStorageError(contrast.issues.join(" "));
         return false;
       }
-      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImage);
+      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImageForProject(projectHeroImage, activeProjectIdRef.current), siteTemplate);
       const storage = getProjectStorage();
       const creatingProject = activeProjectIdRef.current === null;
       const saved = activeProjectIdRef.current
@@ -231,6 +256,7 @@ export default function Home() {
           () => setSectionState(createEmptySectionRequestState()),
           () => setHeroImageState({ loading: false, error: "" }),
         );
+        setProjectHeroImage({ projectId: saved.id, image: heroImageForProject(projectHeroImage, null) });
       }
       activeProjectIdRef.current = saved.id;
       activeProjectRevisionRef.current = saved.revision;
@@ -318,8 +344,12 @@ export default function Home() {
 
   function downloadWebsite(destination: string) {
     if (!page) return;
+    if (!templateContentValid) {
+      setProjectStorageError("Correct the template content fields before exporting this website.");
+      return;
+    }
     const settings = SiteSettingsSchema.parse({ ...siteSettings, ctaDestination: destination });
-    const exported = createWebsiteExport(page, layout, settings, heroImage);
+    const exported = createWebsiteExport(page, layout, settings, heroImageForProject(projectHeroImage, activeProjectIdRef.current), siteTemplate);
     const blob = new Blob([exported.html], { type: "text/html;charset=utf-8" });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -333,7 +363,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!activeProjectId || !isDirty || !page || pendingTransition) return;
+    if (!activeProjectId || !isDirty || !page || pendingTransition || !templateContentValid) return;
     const projectId = activeProjectId;
     const expectedRevision = activeProjectRevision;
     const version = dirtyRevision;
@@ -347,7 +377,7 @@ export default function Home() {
           setProjectStorageError(contrast.issues.join(" "));
           return;
         }
-        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImage);
+        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImageForProject(projectHeroImage, projectId), siteTemplate);
         const saved = getProjectStorage().save(projectId, snapshot, expectedRevision);
         if (dirtyRevisionRef.current !== version || activeProjectIdRef.current !== projectId) return;
         activeProjectRevisionRef.current = saved.revision;
@@ -364,7 +394,7 @@ export default function Home() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, heroImage, isDirty, layout, page, pendingTransition, refreshProjects, safeStorageMessage, siteSettings]);
+  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, projectHeroImage, refreshProjects, safeStorageMessage, siteSettings, siteTemplate, templateContentValid]);
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
     requestCoordinator.briefChanged(
@@ -386,8 +416,12 @@ export default function Home() {
     markDirty();
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>, templateId: SiteTemplateId = "generic") {
     event.preventDefault();
+    if (!templateContentValid) {
+      setNotice("Correct the template content fields before generating another page.");
+      return;
+    }
     if (loading) return;
     const projectId = activeProjectIdRef.current;
     const requestBrief = brief;
@@ -397,10 +431,14 @@ export default function Home() {
     setLoading(true);
     const isCurrent = () => requestCoordinator.isGenerationCurrent(identity, generationContextKey()) && activeProjectIdRef.current === projectId;
     await requestCoordinator.runGeneration(identity, generationContextKey, async () => {
-      const response = await fetch("/api/generate", {
+      const endpoint = templateId === "restaurant" ? "/api/generate-template"
+        : templateId === "fashion" ? "/api/generate-fashion"
+          : templateId === "real-estate" ? "/api/generate-real-estate"
+          : "/api/generate";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBrief),
+        body: JSON.stringify(templateId === "generic" ? requestBrief : { templateId, brief: requestBrief }),
       });
       const result: unknown = await response.json();
       if (!response.ok || typeof result !== "object" || result === null || !("data" in result)) {
@@ -409,13 +447,56 @@ export default function Home() {
           : "We couldn’t generate your page right now. Please try again.";
         throw new Error(message);
       }
+      if (templateId === "restaurant") {
+        const data = result.data;
+        if (typeof data !== "object" || data === null || !("page" in data) || !("template" in data)) {
+          throw new Error("The generation service returned invalid restaurant content. Please try again.");
+        }
+        const generatedPage = GeneratedPageSchema.safeParse(data.page);
+        const generatedTemplate = RestaurantSiteTemplateSchema.safeParse(data.template);
+        if (!generatedPage.success || !generatedTemplate.success) throw new Error("The generation service returned invalid restaurant content. Please try again.");
+        return { page: generatedPage.data, template: generatedTemplate.data };
+      }
+      if (templateId === "fashion") {
+        const data = result.data;
+        if (typeof data !== "object" || data === null || !("page" in data) || !("template" in data)) {
+          throw new Error("The generation service returned invalid fashion content. Please try again.");
+        }
+        const generatedPage = GeneratedPageSchema.safeParse(data.page);
+        const generatedTemplate = FashionSiteTemplateSchema.safeParse(data.template);
+        if (!generatedPage.success || !generatedTemplate.success) throw new Error("The generation service returned invalid fashion content. Please try again.");
+        return { page: generatedPage.data, template: generatedTemplate.data };
+      }
+      if (templateId === "real-estate") {
+        const data = result.data;
+        if (typeof data !== "object" || data === null || !("page" in data) || !("template" in data)) {
+          throw new Error("The generation service returned invalid Real Estate content. Please try again.");
+        }
+        const generatedPage = GeneratedPageSchema.safeParse(data.page);
+        const generatedTemplate = RealEstateSiteTemplateSchema.safeParse(data.template);
+        if (!generatedPage.success || !generatedTemplate.success) throw new Error("The generation service returned invalid Real Estate content. Please try again.");
+        return { page: generatedPage.data, template: generatedTemplate.data };
+      }
       const generatedPage = GeneratedPageSchema.safeParse(result.data);
       if (!generatedPage.success) throw new Error("The generation service returned an invalid page. Please try again.");
-      return generatedPage.data;
-    }, (generatedPage) => {
+      return { page: generatedPage.data, template: DEFAULT_SITE_TEMPLATE };
+    }, (generated) => {
       if (!isCurrent()) return;
       invalidateSectionResponses();
-      setPage((current) => isCurrent() ? { ...generatedPage, layout: requestLayout } : current);
+      setPage((current) => isCurrent() ? { ...generated.page, layout: requestLayout } : current);
+      setSiteTemplate(generated.template);
+      setRestaurantEditorRevision((revision) => revision + 1);
+      setTemplateContentValid(true);
+      if (generated.template.id === "restaurant") {
+        const restaurantContent = generated.template.content;
+        setSiteSettings((current) => initializeRestaurantNavigation(current, restaurantContent));
+      } else if (generated.template.id === "fashion") {
+        const fashionContent = generated.template.content;
+        setSiteSettings((current) => initializeFashionNavigation(current, fashionContent));
+      } else if (generated.template.id === "real-estate") {
+        const realEstateContent = generated.template.content;
+        setSiteSettings((current) => initializeRealEstateNavigation(current, realEstateContent));
+      }
       markDirty();
       setNotice("Your landing page is ready.");
     }, (error) => {
@@ -427,6 +508,18 @@ export default function Home() {
         "Generation is not configured on this server.",
         "The request could not be generated. Please revise the business brief and try again.",
         "The generation service returned unusable content. Please try again.",
+        "The generation service returned unusable restaurant content. Please try again.",
+        "The generation service returned invalid restaurant content. Please try again.",
+        "Check the restaurant template and business brief.",
+        "We couldn’t generate your restaurant page right now. Please try again.",
+        "The generation service returned invalid fashion content. Please try again.",
+        "The generation service returned unusable fashion content. Please try again.",
+        "Check the fashion template and business brief.",
+        "We couldn’t generate your fashion page right now. Please try again.",
+        "The generation service returned invalid Real Estate content. Please try again.",
+        "The generation service returned unusable Real Estate content. Please try again.",
+        "Check the Real Estate template and business brief.",
+        "We couldn’t generate your Real Estate page right now. Please try again.",
       ];
       setNotice(error instanceof Error && safeMessages.includes(error.message)
         ? error.message
@@ -457,6 +550,31 @@ export default function Home() {
 
   function editCtaDestination(value: string) {
     editSiteSettings((current) => ({ ...current, ctaDestination: value }));
+  }
+
+  function editRestaurantContent(content: RestaurantContent | null) {
+    setTemplateContentValid(content !== null);
+    if (content && siteTemplate.id === "restaurant") {
+      setSiteTemplate({ id: "restaurant", content });
+    }
+    markDirty();
+  }
+
+  function editFashionContent(content: FashionContent | null) {
+    setTemplateContentValid(content !== null);
+    if (content && siteTemplate.id === "fashion") {
+      setSiteTemplate({ id: "fashion", content });
+    }
+    markDirty();
+  }
+
+  function editRealEstateContent(content: RealEstateContent | null) {
+    setTemplateContentValid(content !== null);
+    if (content && siteTemplate.id === "real-estate") {
+      setSiteTemplate({ id: "real-estate", content });
+      setSiteSettings((current) => initializeRealEstateNavigation(current, content));
+    }
+    markDirty();
   }
 
   function editGeneratedSection(section: EditableSection, value: string, featureIndex?: number) {
@@ -555,7 +673,7 @@ export default function Home() {
       return parsed.data;
     }, (image) => {
       if (!isCurrent()) return;
-      setHeroImage(image);
+      setProjectHeroImage({ projectId, image });
       markDirty();
     }, (error) => {
       if (!isCurrent()) return;
@@ -568,7 +686,8 @@ export default function Home() {
   }
 
   function removeHeroImage() {
-    setHeroImage(null);
+    requestCoordinator.invalidateHeroImage();
+    setProjectHeroImage({ projectId: activeProjectIdRef.current, image: null });
     setHeroImageState({ loading: false, error: "" });
     markDirty();
   }
@@ -589,13 +708,13 @@ export default function Home() {
           <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> YOUR CREATIVE STUDIO</div><h1>Let’s make something <em>remarkable.</em></h1><p>Tell us about your business. We’ll turn your big idea into a page worth landing on.</p></div><div className="step-badge"><span>01</span><span className="step-line"/><span>02</span><span className="step-line"/><span>03</span></div></div>
           <div className="project-toolbar">
             <div><strong>{activeProjectName || "Untitled website"}</strong><span className={`save-indicator ${isDirty ? "unsaved" : ""}`} role="status" aria-live="polite">{saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Not saved" : isDirty ? activeProjectId ? "Unsaved changes" : "Unsaved draft" : activeProjectId ? "Saved" : "Not saved yet"}</span></div>
-            <div className="project-toolbar-actions"><button type="button" onClick={() => setExportDialogOpen(true)} disabled={!page}>Export HTML</button><button type="button" onClick={saveCurrentProject} disabled={!page || saveStatus === "saving"}>Save Project</button><button type="button" onClick={showProjectManager}>My Projects</button><button type="button" onClick={confirmNewProject}>New Project</button></div>
+            <div className="project-toolbar-actions"><button type="button" onClick={() => setExportDialogOpen(true)} disabled={!page || !templateContentValid}>Export HTML</button><button type="button" onClick={saveCurrentProject} disabled={!page || saveStatus === "saving"}>Save Project</button><button type="button" onClick={showProjectManager}>My Projects</button><button type="button" onClick={confirmNewProject}>New Project</button></div>
           </div>
           {projectStorageError && <p className="project-storage-error page-storage-error" role="alert">{projectStorageError}</p>}
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
           <div className="studio-grid" id="brief">
             <BriefForm brief={brief} onChange={updateBrief} onSubmit={submit} loading={loading} />
-          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} heroImage={heroImage} heroImageState={heroImageState} onGenerateHeroImage={generateHeroImage} onRemoveHeroImage={removeHeroImage} />
+          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} heroImage={heroImage} heroImageState={heroImageState} onGenerateHeroImage={generateHeroImage} onRemoveHeroImage={removeHeroImage} template={siteTemplate} activeProjectId={activeProjectId} restaurantEditorRevision={restaurantEditorRevision} onRestaurantContentChange={editRestaurantContent} onFashionContentChange={editFashionContent} onRealEstateContentChange={editRealEstateContent} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
           <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>
