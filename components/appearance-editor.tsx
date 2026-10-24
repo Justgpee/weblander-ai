@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   SITE_STYLE_PALETTES,
   TypographySchema,
@@ -7,6 +8,7 @@ import {
   type Typography,
 } from "@/lib/site-settings";
 import type { VisualStyle } from "@/lib/generation";
+import { appearanceColorControlKey, clearHexColorOverride, HEX_COLOR_DRAFT_ERROR_MESSAGE, selectHexColor, shouldShowHexColorDraftError, updateHexColorDraft } from "@/lib/appearance-color-draft";
 
 const COLOR_FIELDS = [
   ["primary", "Primary color", "Main text and call-to-action fill"],
@@ -19,6 +21,7 @@ export function AppearanceEditor({ style, appearance, onChange }: {
   appearance: Appearance;
   onChange: (appearance: Appearance) => void;
 }) {
+  const [draftResetRevision, setDraftResetRevision] = useState(0);
   const palette = SITE_STYLE_PALETTES[style];
   const contrast = validateAppearanceContrast(style, appearance);
   const showPresetAccentWarning = hasPreservedAccentBorderWarning(style, appearance);
@@ -38,15 +41,17 @@ export function AppearanceEditor({ style, appearance, onChange }: {
       <div className="appearance-color-grid">
         {COLOR_FIELDS.map(([key, label, description]) => {
           const value = appearance.colors[key] ?? palette[key];
-          return <div className="appearance-color" key={key}>
-            <label htmlFor={`appearance-${key}`}>{label}</label>
-            <span>{description}</span>
-            <div className="appearance-color-controls">
-              <input id={`appearance-${key}`} type="color" value={value} onChange={(event) => setColor(key, event.target.value)} aria-label={label} />
-              <code>{value.toUpperCase()}</code>
-              <button type="button" onClick={() => setColor(key, null)} disabled={appearance.colors[key] === null}>Use style default</button>
-            </div>
-          </div>;
+          return <AppearanceColorControl
+            key={appearanceColorControlKey(key, draftResetRevision)}
+            colorKey={key}
+            label={label}
+            description={description}
+            value={value}
+            override={appearance.colors[key]}
+            onPickerChange={(color) => setColor(key, color)}
+            onHexChange={(color) => setColor(key, color)}
+            onClear={() => setColor(key, null)}
+          />;
         })}
       </div>
       <div className="appearance-typography">
@@ -65,7 +70,87 @@ export function AppearanceEditor({ style, appearance, onChange }: {
         {showPresetAccentWarning && <span>Style default accent border is {contrast.accentControl.toFixed(2)}:1. This existing preset is preserved; adjust the accent or primary color to meet 3:1.</span>}
         {contrast.issues.map((issue) => <span role="alert" key={issue}>{issue}</span>)}
       </div>
-      <button className="appearance-reset-all" type="button" onClick={() => onChange({ colors: { primary: null, background: null, accent: null }, typography: "preset" })}>Reset all appearance to style defaults</button>
+      <button className="appearance-reset-all" type="button" onClick={() => {
+        setDraftResetRevision((revision) => revision + 1);
+        onChange({ colors: { primary: null, background: null, accent: null }, typography: "preset" });
+      }}>Reset all appearance to style defaults</button>
     </details>
   );
+}
+
+function AppearanceColorControl({ colorKey, label, description, value, override, onPickerChange, onHexChange, onClear }: {
+  colorKey: keyof Appearance["colors"];
+  label: string;
+  description: string;
+  value: string;
+  override: string | null;
+  onPickerChange: (color: string) => void;
+  onHexChange: (color: string) => void;
+  onClear: () => void;
+}) {
+  const [invalidDraft, setInvalidDraft] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
+  const draft = invalidDraft ?? value.toUpperCase();
+  const showError = invalidDraft !== null && shouldShowHexColorDraftError(invalidDraft, touched);
+  const error = showError ? HEX_COLOR_DRAFT_ERROR_MESSAGE : "";
+  const hexInputId = `appearance-${colorKey}-hex`;
+  const helpId = `appearance-${colorKey}-hex-help`;
+  const errorId = `appearance-${colorKey}-hex-error`;
+
+  return <div className="appearance-color" key={colorKey}>
+    <label htmlFor={`appearance-${colorKey}`}>{label}</label>
+    <span>{description}</span>
+    <div className="appearance-color-controls">
+      <input
+        id={`appearance-${colorKey}`}
+        type="color"
+        value={value.toLowerCase()}
+        onChange={(event) => {
+          const result = selectHexColor(event.target.value);
+          setInvalidDraft(null);
+          setTouched(false);
+          onPickerChange(result.committedColor!);
+        }}
+        aria-label={`${label} color picker`}
+      />
+      <label className="sr-only" htmlFor={hexInputId}>{label} HEX code</label>
+      <input
+        id={hexInputId}
+        className="appearance-hex-input"
+        type="text"
+        inputMode="text"
+        autoCapitalize="characters"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={7}
+        value={draft}
+        placeholder="#456B52"
+        onBlur={() => {
+          if (invalidDraft !== null) setTouched(true);
+        }}
+        onChange={(event) => {
+          const result = updateHexColorDraft(override, event.target.value);
+          if (result.valid && result.committedColor) {
+            setInvalidDraft(null);
+            setTouched(false);
+            onHexChange(result.committedColor);
+          } else {
+            setInvalidDraft(result.draft);
+            if (result.draft.length >= 7) setTouched(true);
+          }
+        }}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? `${helpId} ${errorId}` : helpId}
+      />
+      <code aria-hidden="true">{value.toUpperCase()}</code>
+      <button type="button" onClick={() => {
+        clearHexColorOverride(value);
+        setInvalidDraft(null);
+        setTouched(false);
+        onClear();
+      }} disabled={override === null}>Use style default</button>
+    </div>
+    <span id={helpId} className="site-settings-help">Type a six-digit HEX code or use the color picker.</span>
+    {error && <span id={errorId} className="site-settings-error" role="alert">{error}</span>}
+  </div>;
 }

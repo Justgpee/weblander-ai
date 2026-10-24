@@ -84,7 +84,7 @@ export function WebsitePreview({ page, layout, siteSettings, onSiteSettingChange
           </div>
         </div>
       </details>
-      <AppearanceEditor style={style} appearance={appearance} onChange={onAppearanceChange} />
+      <AppearanceEditor key={activeProjectId ?? "draft"} style={style} appearance={appearance} onChange={onAppearanceChange} />
       <div className="hero-image-controls" aria-label="Hero image controls">
         <div><strong>Website hero image</strong><span>{heroImage ? "Saved with this project and included in HTML export." : "Optional image. The illustrated artwork remains as a fallback."}</span></div>
         <button type="button" onClick={onGenerateHeroImage} disabled={!page || heroImageState.loading} aria-busy={heroImageState.loading}>
