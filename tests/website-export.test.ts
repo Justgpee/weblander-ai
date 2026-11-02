@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { VISUAL_STYLES, type GeneratedPage } from "@/lib/generation";
 import { createWebsiteExport, GENERATED_SITE_CSS, renderGeneratedWebsite, sanitizeExportFilename, validateCtaDestination } from "@/lib/website-export";
 import { DEFAULT_SITE_SETTINGS, type SiteSettings } from "@/lib/site-settings";
-import { initializeFashionNavigation, initializeRealEstateNavigation, initializeRestaurantNavigation, type FashionSiteTemplate, type SiteTemplate } from "@/lib/site-templates";
+import { DEFAULT_SITE_TEMPLATE, initializeFashionNavigation, initializeRealEstateNavigation, initializeRestaurantNavigation, type FashionSiteTemplate, type SiteTemplate } from "@/lib/site-templates";
+import { siteNavigationDestinationOptions } from "@/lib/site-navigation-options";
 
 const page: GeneratedPage = {
   businessName: "Northline Studio", description: "Design for independent teams.", audience: "Founders", offering: "Brand identity",
@@ -82,7 +83,7 @@ describe("standalone website export", () => {
   it("keeps navigation, copy, artwork, features, CTA and footer usable at narrow container widths", () => {
     for (const rule of [
       ".site-nav-links{width:100%;justify-content:flex-start",
-      ".site-nav-links a,.site-nav-links span{min-width:0;max-width:100%;overflow-wrap:anywhere}",
+      ".site-nav-links a,.site-nav-links span,.site-nav-links button{min-width:0;max-width:100%;overflow-wrap:anywhere}",
       ".site-copy h1{font-size:clamp(38px,9cqi,64px)",
       ".site-copy>p{font-size:clamp(15px,3cqi,18px)",
       ".site-cta{width:100%;justify-content:center}",
@@ -249,6 +250,62 @@ describe("standalone website export", () => {
     }
   });
 
+  it("uses typed preview navigation and degrades cross-page targets safely in single-page exports", () => {
+    const settings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
+      navigation: [
+        { label: "External", destination: "https://example.com/visit", target: { type: "external", url: "https://example.com/visit" } },
+        { label: "Hero", destination: "#site-headline", target: { type: "section", pageId: "home", anchor: "#site-headline" } },
+        { label: "Contact", destination: "", target: { type: "page", pageId: "contact" } },
+      ],
+      ctaDestination: "https://example.com/book",
+    };
+    const pages = [
+      { id: "home", template: { id: "generic" } as const },
+      { id: "contact", template: { id: "generic" } as const },
+      { id: "about", template: { id: "restaurant", content: restaurantTemplate.content } as const },
+    ];
+    const previewSettings: SiteSettings = {
+      ...settings,
+      navigation: [
+        ...settings.navigation.slice(0, 2),
+        { label: "Story elsewhere", destination: "", target: { type: "section", pageId: "about", anchor: "#site-story" } },
+      ] as SiteSettings["navigation"],
+    };
+    const preview = renderGeneratedWebsite(page, previewSettings, null, restaurantTemplate, { currentPageId: "home", pages });
+    expect(preview).toContain('<a href="https://example.com/visit">External</a>');
+    expect(preview).toContain('<a href="#site-headline">Hero</a>');
+    expect(preview).toContain('data-site-navigation-action="page-section" data-page-id="about" data-site-navigation-anchor="#site-story"');
+    expect(preview).toContain('class="site-cta" href="https://example.com/book"');
+
+    const exported = createWebsiteExport(page, page.layout, previewSettings, null, restaurantTemplate, { currentPageId: "home", pages }).html;
+    expect(exported).toContain('<a href="https://example.com/visit">External</a>');
+    expect(exported).toContain('<a href="#site-headline">Hero</a>');
+    expect(exported).toContain("<span>Story elsewhere</span>");
+    expect(exported).not.toContain('data-site-navigation-action=');
+    expect(exported).not.toContain('href="page:');
+
+    const pageLinkExport = createWebsiteExport(page, page.layout, settings, null, restaurantTemplate, { currentPageId: "home", pages }).html;
+    expect(pageLinkExport).toContain("<span>Contact</span>");
+    expect(pageLinkExport).not.toContain('href="contact"');
+  });
+
+  it("keeps empty, unresolved, and missing page targets noninteractive", () => {
+    const settings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
+      navigation: [
+        { label: "None", destination: "", target: { type: "none" } },
+        { label: "Legacy", destination: "#site-properties", target: { type: "unresolved", value: "#site-properties" } },
+        { label: "Missing", destination: "", target: { type: "page", pageId: "missing" } },
+      ],
+    };
+    const markup = renderGeneratedWebsite(page, settings, null, undefined, { currentPageId: "home", pages: [{ id: "home", template: { id: "generic" } }] });
+    expect(markup).toContain("<span>None</span>");
+    expect(markup).toContain("<span>Legacy</span>");
+    expect(markup).toContain("<span>Missing</span>");
+    expect(markup).not.toContain('data-page-id="missing"');
+  });
+
   it("renders the latest navigation settings immediately while keeping CTA settings independent", () => {
     const settings: SiteSettings = {
       ...DEFAULT_SITE_SETTINGS,
@@ -278,12 +335,164 @@ describe("standalone website export", () => {
       const currentPage = { ...page, style, layout };
       const preview = renderGeneratedWebsite(currentPage, customized);
       const exported = createWebsiteExport(currentPage, layout, customized).html;
-      const inlineStyle = 'style="--site-ink:#1A2938;--site-bg:#F7F4EE;--site-accent:#A56B42;--site-serif:&#39;Trebuchet MS&#39;, Arial, sans-serif;--site-body-font:&#39;Trebuchet MS&#39;, Arial, sans-serif"';
-      expect(preview).toContain(inlineStyle);
-      expect(exported).toContain(inlineStyle);
+      const previewStyle = preview.match(/<div class="site-mock[^"]*" style="([^"]+)"/)?.[1];
+      const exportStyle = exported.match(/<div class="site-mock[^"]*" style="([^"]+)"/)?.[1];
+      expect(previewStyle).toContain("--site-ink:#1A2938;--site-bg:#F7F4EE;--site-accent:#A56B42");
+      expect(previewStyle).toContain("--site-heading-weight:");
+      expect(previewStyle).toContain("--site-button-radius:");
+      expect(previewStyle).toContain("--site-image-radius:");
+      expect(exportStyle).toBe(previewStyle);
       expect(exported).toContain("Trebuchet MS");
+      expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
       expect(exported).not.toMatch(/@import|fonts\.googleapis|https?:\/\/[^\s"']+\.css/i);
     }
+  });
+
+  it("applies distinct token-driven properties in preview and embeds the same styling in export", () => {
+    const rootStyle = (markup: string) => {
+      const value = markup.match(/<div class="site-mock[^"]*" style="([^"]+)"/)?.[1];
+      expect(value).toBeTruthy();
+      return Object.fromEntries(value!.split(";").map((declaration) => {
+        const separator = declaration.indexOf(":");
+        return [declaration.slice(0, separator), declaration.slice(separator + 1)];
+      }));
+    };
+    for (const style of VISUAL_STYLES) for (const layout of ["editorial", "split"] as const) {
+      const currentPage = { ...page, style, layout };
+      const preview = renderGeneratedWebsite(currentPage);
+      const exported = createWebsiteExport(currentPage, layout).html;
+      expect(rootStyle(preview)).toEqual(rootStyle(exported));
+      expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
+    }
+
+    const minimalist = rootStyle(renderGeneratedWebsite({ ...page, style: "Minimalist" }));
+    const professional = rootStyle(renderGeneratedWebsite({ ...page, style: "Professional" }));
+    for (const property of ["--site-serif", "--site-heading-weight", "--site-heading-size", "--site-section-space", "--site-card-gap", "--site-radius", "--site-button-radius", "--site-nav-tracking"]) {
+      expect(minimalist[property]).not.toBe(professional[property]);
+    }
+    for (const rule of [
+      ".site-mock.site-mock .site-copy h1{font-family:var(--site-serif",
+      ".site-mock.site-mock .site-cta:not(.site-cta-text){border-radius:var(--site-button-radius)",
+      ".site-mock.site-mock .site-hero-image,.site-mock.site-mock .fashion-artboard",
+      ".site-mock.site-mock main>section:not(.site-hero){padding-block:var(--site-section-space)",
+    ]) expect(GENERATED_SITE_CSS).toContain(rule);
+  });
+
+  it("preserves style variants across page purposes, industries, layouts, and custom appearances", () => {
+    const cases = [
+      { template: DEFAULT_SITE_TEMPLATE, kind: "home" as const },
+      { template: DEFAULT_SITE_TEMPLATE, kind: "about" as const },
+      { template: DEFAULT_SITE_TEMPLATE, kind: "services" as const },
+      { template: DEFAULT_SITE_TEMPLATE, kind: "products" as const },
+      { template: DEFAULT_SITE_TEMPLATE, kind: "contact" as const },
+      { template: DEFAULT_SITE_TEMPLATE, kind: "legacy" as const },
+      { template: restaurantTemplate, kind: "home" as const },
+      { template: restaurantTemplate, kind: "services" as const },
+      { template: restaurantTemplate, kind: "about" as const },
+      { template: restaurantTemplate, kind: "contact" as const },
+      { template: fashionTemplate, kind: "home" as const },
+      { template: fashionTemplate, kind: "products" as const },
+      { template: fashionTemplate, kind: "about" as const },
+      { template: fashionTemplate, kind: "contact" as const },
+      { template: realEstateTemplate, kind: "home" as const },
+      { template: realEstateTemplate, kind: "services" as const },
+      { template: realEstateTemplate, kind: "about" as const },
+      { template: realEstateTemplate, kind: "contact" as const },
+    ];
+    const customizedSettings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
+      appearance: { colors: { primary: "#111111", background: "#FFFFFF", accent: "#666666" }, typography: "humanist-sans" },
+    };
+    for (const current of cases) for (const style of VISUAL_STYLES) for (const layout of ["editorial", "split"] as const) {
+      const currentPage = { ...page, style, layout };
+      const pageContext = { currentPageId: "style-qa", pageKind: current.kind, pages: [{ id: "style-qa", template: current.template, kind: current.kind }] };
+      const preview = renderGeneratedWebsite(currentPage, customizedSettings, null, current.template, pageContext);
+      const exported = createWebsiteExport(currentPage, layout, customizedSettings, null, current.template, pageContext).html;
+      expect(renderedBody(exported)).toBe(preview.replace(` ${layout} preview`, ` ${layout}`));
+      expect(preview.match(/<div class="([^"]*site-mock[^"]*)"/)?.[1]).toContain(`${style.toLowerCase()} ${layout}`);
+      expect(preview).toContain("--site-ink:#111111;--site-bg:#FFFFFF;--site-accent:#666666");
+      expect(preview).toContain("--site-section-space:");
+      expect(preview).toContain("--site-image-radius:");
+      expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
+    }
+  });
+
+  it("renders distinct About and Contact compositions across templates, styles, and layouts with matching preview and export anchors", () => {
+    const templates = [DEFAULT_SITE_TEMPLATE, restaurantTemplate, fashionTemplate, realEstateTemplate];
+    for (const template of templates) for (const kind of ["about", "contact"] as const) {
+      for (const style of VISUAL_STYLES) for (const layout of ["editorial", "split"] as const) {
+        const currentPage = { ...page, style, layout, headline: kind === "about" ? "A little about our work" : "Start a conversation", subheadline: kind === "about" ? "A thoughtful introduction to the business." : "A clear way to take the next step." };
+        const context = { currentPageId: kind, pageKind: kind, pages: [{ id: kind, template, kind }] };
+        const preview = renderGeneratedWebsite(currentPage, DEFAULT_SITE_SETTINGS, heroImage, template, context);
+        const exported = createWebsiteExport(currentPage, layout, DEFAULT_SITE_SETTINGS, heroImage, template, context).html;
+        const anchors = siteNavigationDestinationOptions(template, kind).map(({ destination }) => destination.slice(1));
+
+        expect(renderedBody(exported)).toBe(preview.replace(` ${layout} preview`, ` ${layout}`));
+        expect(preview).toContain(` ${style.toLowerCase()} ${layout} preview`);
+        expect(preview).toContain(kind === "about" ? 'class="site-about-composition" id="site-about"' : 'class="site-contact-action" id="site-contact"');
+        expect(preview).toContain('class="site-hero-image"');
+        expect(preview).toContain(`--site-heading-weight:`);
+        for (const anchor of anchors) expect(preview).toContain(`id="${anchor}"`);
+        if (kind === "about") expect(preview).toContain(currentPage.features[0]);
+
+        if (kind === "about" && template.id === "restaurant") expect(preview).toContain("A neighborhood kitchen shaped by seasonal cooking and shared tables.");
+        if (kind === "about" && template.id === "fashion") expect(preview).toContain("An independent design studio exploring clothing as a thoughtful part of everyday life.");
+        if (kind === "about" && template.id === "real-estate") expect(preview).toContain("We help people explore places that feel right for the next chapter.");
+        if (kind === "contact" && template.id === "restaurant") {
+          expect(preview).toContain("North district");
+          expect(preview).toContain("Tuesday to Sunday, 11 am to 9 pm");
+        } else if (kind === "contact") {
+          expect(preview).not.toContain('id="site-visit"');
+        }
+        expect(preview).not.toContain("<form");
+        expect(preview).not.toContain("mailto:");
+        expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
+      }
+    }
+  });
+
+  it("omits missing template stories and contact details without losing page-purpose sections", () => {
+    const sparseTemplates: SiteTemplate[] = [
+      { id: "restaurant", content: { menuHighlights: restaurantTemplate.content.menuHighlights } },
+      { id: "fashion", content: { collectionHighlights: fashionTemplate.content.collectionHighlights } },
+      { id: "real-estate", content: { featuredProperties: realEstateTemplate.content.featuredProperties } },
+    ];
+    for (const template of sparseTemplates) {
+      const about = renderGeneratedWebsite(page, DEFAULT_SITE_SETTINGS, null, template, { currentPageId: "about", pageKind: "about", pages: [{ id: "about", template, kind: "about" }] });
+      const contact = renderGeneratedWebsite(page, DEFAULT_SITE_SETTINGS, null, template, { currentPageId: "contact", pageKind: "contact", pages: [{ id: "contact", template, kind: "contact" }] });
+      expect(about).toContain('id="site-about"');
+      expect(about).not.toContain('id="site-story"');
+      expect(about).not.toContain('id="site-brand-story"');
+      expect(about).not.toContain('id="site-agency-story"');
+      expect(contact).toContain('id="site-contact"');
+      expect(contact).not.toContain('id="site-visit"');
+      expect(about).toContain('class="site-art');
+      expect(contact).toContain('class="site-art');
+      expect(about).not.toContain('<img class="site-hero-image"');
+      expect(contact).not.toContain('<img class="site-hero-image"');
+      expect(siteNavigationDestinationOptions(template, "about").map(({ destination }) => destination)).not.toContain("#site-story");
+      expect(siteNavigationDestinationOptions(template, "contact").map(({ destination }) => destination)).not.toContain("#site-visit");
+    }
+  });
+
+  it("escapes About and Contact content and keeps an unset Contact CTA noninteractive", () => {
+    const unsafeCopy = { ...page, businessName: 'Northline "Studio" & Co.', headline: "About <script>alert(1)</script>", subheadline: "Copy with <b>markup</b> & symbols.", features: ["Carefully <chosen> ideas", "Design & direction"] };
+    const restaurant: SiteTemplate = { id: "restaurant", content: {
+      menuHighlights: restaurantTemplate.content.menuHighlights,
+      story: `A kitchen's <story> & shared tables.`, location: `Lagos & "nearby"`, openingHours: "Weekdays <by appointment>",
+    } };
+    const about = renderGeneratedWebsite(unsafeCopy, DEFAULT_SITE_SETTINGS, null, restaurant, { currentPageId: "about", pageKind: "about", pages: [{ id: "about", template: restaurant, kind: "about" }] });
+    const contact = renderGeneratedWebsite(unsafeCopy, DEFAULT_SITE_SETTINGS, null, restaurant, { currentPageId: "contact", pageKind: "contact", pages: [{ id: "contact", template: restaurant, kind: "contact" }] });
+    for (const markup of [about, contact]) {
+      expect(markup).toContain("About &lt;script&gt;alert(1)&lt;/script&gt;");
+      expect(markup).toContain("Northline &quot;Studio&quot; &amp; Co.");
+      expect(markup).not.toContain("<script>");
+    }
+    expect(about).toContain("A kitchen&#39;s &lt;story&gt; &amp; shared tables.");
+    expect(contact).toContain("Lagos &amp; &quot;nearby&quot;");
+    expect(contact).toContain("Weekdays &lt;by appointment&gt;");
+    expect(contact).toContain('<span class="site-cta site-cta-text">Book a conversation</span>');
+    expect(contact).not.toContain('<a class="site-cta"');
   });
 
   it("rejects customized color combinations that do not meet text contrast", () => {
@@ -393,6 +602,93 @@ describe("standalone website export", () => {
     expect(GENERATED_SITE_CSS).toContain(".restaurant-menu-grid{list-style:none");
     expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.restaurant-site");
     expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.restaurant-art .restaurant-artboard");
+  });
+
+  it("renders Restaurant Services as a distinct Menu page with matching preview and offline export", () => {
+    const settings: SiteSettings = {
+      ...initializeRestaurantNavigation(DEFAULT_SITE_SETTINGS, restaurantTemplate.content),
+      navigation: [
+        { label: "Menu", destination: "#site-menu", target: { type: "section", pageId: "services", anchor: "#site-menu" } },
+        { label: "Our story", destination: "", target: { type: "section", pageId: "services", anchor: "#site-story" } },
+        { label: "Visit", destination: "", target: { type: "section", pageId: "services", anchor: "#site-visit" } },
+      ],
+      ctaDestination: "",
+    };
+    for (const layout of ["editorial", "split"] as const) for (const style of VISUAL_STYLES) {
+      const currentPage = { ...page, layout, style };
+      const pageContext = { currentPageId: "services", pageKind: "services" as const, pages: [{ id: "services", template: restaurantTemplate, kind: "services" as const }] };
+      const preview = renderGeneratedWebsite(currentPage, settings, null, restaurantTemplate, pageContext);
+      const exported = createWebsiteExport(currentPage, layout, settings, null, restaurantTemplate, pageContext).html;
+      const body = exported.match(/<body>\n([\s\S]*)\n<\/body>/)?.[1];
+      expect(body).toBe(preview.replace(` ${layout} preview`, ` ${layout}`));
+      for (const markup of [preview, exported]) {
+        expect(markup).toContain(`class="site-mock restaurant-site ${style.toLowerCase()} ${layout}${markup === preview ? " preview" : ""} restaurant-menu-page"`);
+        expect(markup).toContain('<section class="restaurant-menu restaurant-menu-page-listing" id="site-menu"');
+        expect(markup).toContain('<ol class="restaurant-menu-grid restaurant-menu-page-grid">');
+        expect(markup).toContain('<span class="restaurant-menu-index" aria-hidden="true">01</span>');
+        expect(markup).toContain("Garden pasta");
+        expect(markup).toContain("Roasted carrots");
+        expect(markup).toContain('<span class="site-cta site-cta-text">Book a conversation</span>');
+        expect(markup).toContain("<span>Our story</span>");
+        expect(markup).toContain("<span>Visit</span>");
+        expect(markup).not.toContain('id="site-story"');
+        expect(markup).not.toContain('id="site-visit"');
+        expect(markup).not.toContain("For Founders");
+        expect(markup).not.toContain('class="site-features"');
+      }
+      expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
+    }
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.restaurant-menu-page.minimalist .restaurant-menu-page-listing");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.restaurant-menu-page.luxury .restaurant-dish");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.restaurant-menu-page.bold .restaurant-section-heading h2");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.restaurant-menu-page.playful .restaurant-menu-index");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.restaurant-menu-page.professional .restaurant-menu-page-grid");
+    expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.restaurant-menu-page");
+
+    const withImage = renderGeneratedWebsite(page, settings, heroImage, restaurantTemplate, { currentPageId: "services", pageKind: "services", pages: [{ id: "services", template: restaurantTemplate, kind: "services" }] });
+    expect(withImage).toContain(`src="data:image/webp;base64,${heroImage.base64}"`);
+    expect(withImage).not.toContain("restaurant-artboard");
+  });
+
+  it("renders Fashion Collections, Real Estate Properties, and Generic Services and Products by page purpose", () => {
+    const cases = [
+      { template: fashionTemplate, pageKind: "products" as const, section: "site-collections", className: "fashion-collections-page", art: "fashion-artboard", expected: ["Everyday forms", "Evening edit", "Soft structure"], forbidden: ["site-brand-story", "Purchase", "Add to cart"] },
+      { template: realEstateTemplate, pageKind: "services" as const, section: "site-properties", className: "real-estate-properties-page", art: "real-estate-artboard", expected: ["Garden Courtyard", "Harbor Residences", "The Linden House", "PROPERTY HIGHLIGHT"], forbidden: ["site-agency-story", "Active listings", "bedrooms", "Availability"] },
+      { template: DEFAULT_SITE_TEMPLATE, pageKind: "services" as const, section: "site-services", className: "generic-services-page", art: "site-arch", expected: page.features, forbidden: ["site-products", "Add to cart", "Checkout"] },
+      { template: DEFAULT_SITE_TEMPLATE, pageKind: "products" as const, section: "site-products", className: "generic-products-page", art: "site-arch", expected: page.features, forbidden: ["site-services", "Add to cart", "Checkout", "Inventory"] },
+    ];
+    for (const current of cases) for (const layout of ["editorial", "split"] as const) for (const style of VISUAL_STYLES) {
+      const currentPage = { ...page, layout, style };
+      const context = { currentPageId: current.pageKind, pageKind: current.pageKind, pages: [{ id: current.pageKind, template: current.template, kind: current.pageKind }] };
+      const settings: SiteSettings = {
+        ...DEFAULT_SITE_SETTINGS,
+        navigation: [
+          { label: "Section", destination: `#${current.section}`, target: { type: "section", pageId: current.pageKind, anchor: `#${current.section}` as "#site-collections" | "#site-properties" | "#site-services" | "#site-products" } },
+          { label: "No link", destination: "", target: { type: "none" } },
+          { label: "External", destination: "https://example.com", target: { type: "external", url: "https://example.com/" } },
+        ],
+      };
+      const preview = renderGeneratedWebsite(currentPage, settings, null, current.template, context);
+      const exported = createWebsiteExport(currentPage, layout, settings, null, current.template, context).html;
+      const body = exported.match(/<body>\n([\s\S]*)\n<\/body>/)?.[1];
+      expect(body).toBe(preview.replace(` ${layout} preview`, ` ${layout}`));
+      for (const markup of [preview, exported]) {
+        expect(markup).toContain(` ${current.className}`);
+        expect(markup).toContain(`id="${current.section}"`);
+        expect(markup).toContain(`<a href="#${current.section}">Section</a>`);
+        expect(markup).toContain('<span>No link</span>');
+        expect(markup).toContain('<a href="https://example.com/">External</a>');
+        for (const text of current.expected) expect(markup).toContain(text);
+        for (const text of current.forbidden) expect(markup).not.toContain(text);
+        expect(markup).toContain(current.art);
+      }
+      expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
+    }
+    for (const pagePurpose of ["fashion-collections-page", "real-estate-properties-page", "generic-services-page", "generic-products-page"]) {
+      for (const style of VISUAL_STYLES) expect(GENERATED_SITE_CSS).toContain(`.site-mock.${pagePurpose}.${style.toLowerCase()}`);
+    }
+    expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.purpose-page");
+    expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.restaurant-menu-page");
   });
 
   it("keeps the generic composition intact and includes restaurant optional sections independently", () => {
@@ -766,7 +1062,7 @@ describe("standalone website export", () => {
       expect(renderedBody(markup)).toContain('<div class="site-art real-estate-art" aria-hidden="true">');
       expect(renderedBody(markup)).toContain('<div class="real-estate-artboard">');
       expect(renderedBody(markup)).toContain("real-estate-building-two");
-      expect(renderedBody(markup)).toContain('<a href="#site-properties">Properties</a>');
+      expect(renderedBody(markup)).not.toContain('<a href="#site-properties">Properties</a>');
       expect(renderedBody(markup)).not.toContain('class="site-art restaurant-art"');
       expect(renderedBody(markup)).not.toContain('class="site-art fashion-art"');
     }

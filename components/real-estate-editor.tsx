@@ -5,13 +5,15 @@ import { realEstateContentToDraft, validateRealEstateContentDraft, type RealEsta
 import type { RealEstateContent } from "@/lib/site-templates";
 
 type RealEstateEditorProps = {
+  pageId: string;
   content: RealEstateContent;
   onChange: (content: RealEstateContent | null) => void;
 };
 
-export function RealEstateEditor({ content, onChange }: RealEstateEditorProps) {
+export function RealEstateEditor({ pageId, content, onChange }: RealEstateEditorProps) {
   const [draft, setDraft] = useState<RealEstateContentDraft>(() => realEstateContentToDraft(content));
   const validation = validateRealEstateContentDraft(draft);
+  const idPrefix = `${pageId}-real-estate`;
 
   function update(next: RealEstateContentDraft) {
     setDraft(next);
@@ -44,8 +46,8 @@ export function RealEstateEditor({ content, onChange }: RealEstateEditorProps) {
           {draft.featuredProperties.map((property, index) => {
             const nameError = fieldError(`Featured property ${index + 1} name`);
             const descriptionError = fieldError(`Featured property ${index + 1} description`);
-            const nameId = `real-estate-property-name-${index}`;
-            const descriptionId = `real-estate-property-description-${index}`;
+            const nameId = `${idPrefix}-property-name-${index}`;
+            const descriptionId = `${idPrefix}-property-description-${index}`;
             return (
               <fieldset className="restaurant-editor-dish" key={index}>
                 <legend>Featured property highlight {index + 1}</legend>
@@ -63,9 +65,9 @@ export function RealEstateEditor({ content, onChange }: RealEstateEditorProps) {
           })}
         </div>
         {validation.errors.some((error) => error === "Keep between two and four featured property highlights.") && <p className="restaurant-editor-error" role="alert">Keep between two and four featured property highlights. A saved Real Estate project needs at least two valid highlights.</p>}
-        <label className="restaurant-editor-field" htmlFor="real-estate-agency-story">Agency story <span>Optional; leave blank to omit this section.</span>
-          <textarea id="real-estate-agency-story" rows={3} value={draft.agencyStory} onChange={(event) => update({ ...draft, agencyStory: event.target.value })} aria-invalid={Boolean(fieldError("Agency story must"))} aria-describedby={fieldError("Agency story must") ? "real-estate-agency-story-error" : undefined} />
-          {fieldError("Agency story must") && <span id="real-estate-agency-story-error" className="site-settings-error">{fieldError("Agency story must")}</span>}
+        <label className="restaurant-editor-field" htmlFor={`${idPrefix}-agency-story`}>Agency story <span>Optional; leave blank to omit this section.</span>
+          <textarea id={`${idPrefix}-agency-story`} rows={3} value={draft.agencyStory} onChange={(event) => update({ ...draft, agencyStory: event.target.value })} aria-invalid={Boolean(fieldError("Agency story must"))} aria-describedby={fieldError("Agency story must") ? `${idPrefix}-agency-story-error` : undefined} />
+          {fieldError("Agency story must") && <span id={`${idPrefix}-agency-story-error`} className="site-settings-error">{fieldError("Agency story must")}</span>}
         </label>
         {validation.errors.length > 0 && <p className="restaurant-editor-error" role="status">Correct the highlighted Real Estate fields before saving or generating another page.</p>}
       </div>

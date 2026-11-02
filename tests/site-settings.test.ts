@@ -5,7 +5,10 @@ import {
   DEFAULT_APPEARANCE,
   DEFAULT_SITE_SETTINGS,
   SiteDestinationSchema,
+  SiteNavigationTargetSchema,
   SiteSettingsSchema,
+  SiteSettingsV9Schema,
+  SiteSettingsV10Schema,
   SITE_STYLE_PALETTES,
   TypographySchema,
   contrastRatio,
@@ -20,7 +23,7 @@ describe("appearance settings", () => {
     expect(SiteSettingsSchema.safeParse(DEFAULT_SITE_SETTINGS).success).toBe(true);
     expect(SiteSettingsSchema.safeParse({ ...DEFAULT_SITE_SETTINGS, navigation: DEFAULT_SITE_SETTINGS.navigation.slice(0, 2) }).success).toBe(false);
     expect(SiteSettingsSchema.safeParse({ ...DEFAULT_SITE_SETTINGS, extra: true }).success).toBe(false);
-    for (const destination of ["", "https://example.com/path?a=1&b=2", "http://localhost:3000/page", "#top", "#site-headline", "#site-story", "#site-menu", "#site-visit", "#site-properties", "#site-agency-story"]) {
+    for (const destination of ["", "https://example.com/path?a=1&b=2", "http://localhost:3000/page", "#top", "#site-headline", "#site-about", "#site-contact", "#site-story", "#site-menu", "#site-visit", "#site-properties", "#site-agency-story", "#site-services", "#site-products"]) {
       expect(SiteDestinationSchema.safeParse(destination).success, destination).toBe(true);
     }
     expect(validateSiteDestination("")).toBeUndefined();
@@ -30,6 +33,34 @@ describe("appearance settings", () => {
     for (const destination of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "//example.com", "\\\\example.com", "https://user:pass@example.com", "#contact", "https://example.com/\npath", "\thttps://example.com"]) {
       expect(SiteDestinationSchema.safeParse(destination).success, destination).toBe(false);
     }
+  });
+
+  it("validates strict typed navigation targets while preserving the frozen v9 string contract", () => {
+    const typedTargets = [
+      { type: "none" },
+      { type: "external", url: "https://example.com/menu" },
+      { type: "page", pageId: "contact" },
+      { type: "section", pageId: "home", anchor: "#site-headline" },
+      { type: "section", pageId: "about", anchor: "#site-about" },
+      { type: "section", pageId: "contact", anchor: "#site-contact" },
+      { type: "unresolved", value: "#site-properties" },
+    ] as const;
+    for (const target of typedTargets) expect(SiteNavigationTargetSchema.safeParse(target).success).toBe(true);
+    for (const target of [
+      { type: "external", url: "javascript:alert(1)" },
+      { type: "external", url: "https://user:pass@example.com" },
+      { type: "page", pageId: "../contact" },
+      { type: "section", pageId: "home", anchor: "#not-supported" },
+      { type: "unresolved", value: "javascript:alert(1)" },
+      { type: "none", unexpected: true },
+    ]) expect(SiteNavigationTargetSchema.safeParse(target).success).toBe(false);
+
+    const legacy = { ...DEFAULT_SITE_SETTINGS, navigation: DEFAULT_SITE_SETTINGS.navigation.map(({ label, destination }) => ({ label, destination })) };
+    expect(SiteSettingsV9Schema.safeParse(legacy).success).toBe(true);
+    expect(SiteSettingsV9Schema.safeParse({ ...legacy, navigation: legacy.navigation.map((entry) => ({ ...entry, target: { type: "none" } })) }).success).toBe(false);
+    const current = { ...legacy, navigation: legacy.navigation.map((entry) => ({ ...entry, target: { type: "none" as const } })) };
+    expect(SiteSettingsV10Schema.safeParse(current).success).toBe(true);
+    expect(SiteSettingsV10Schema.safeParse(legacy).success).toBe(false);
   });
 
   it("validates strict color overrides and curated typography values", () => {

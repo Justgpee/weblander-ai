@@ -12,18 +12,49 @@ import { requestProjectTransition, resolveProjectTransition, type ProjectTransit
 import {
   ProjectStorageError,
   createProjectStorage,
+  ProjectPageSchema,
+  ProjectPageContentSchema,
+  projectSnapshotFromPages,
   pageFromProject,
-  projectSnapshotFromPage,
+  siteTemplateFromProject,
+  type ProjectPage,
   type ProjectRecord,
   type ProjectStorage,
 } from "@/lib/projects";
 import { createWebsiteExport } from "@/lib/website-export";
-import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteSettings } from "@/lib/site-settings";
+import { AppearanceSchema, DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, type Appearance, type SiteNavigationTarget, type SiteSettings } from "@/lib/site-settings";
+import { siteNavigationDestinationOptions, siteNavigationEntryWithTarget } from "@/lib/site-navigation-options";
 import { createEmptySectionRequestState, type SectionRequestState } from "@/lib/section-request-state";
 import { createStudioRequestCoordinator } from "@/lib/studio-request-coordinator";
+import { createPageGenerationCoordinator, pageKindLabel, updateProjectPage, type AddablePageKind } from "@/lib/studio-pages";
+import { resolveStudioPageSelection } from "@/lib/studio-page-selection";
+import { runStudioPageGeneration, runStudioPageRegeneration } from "@/lib/studio-page-generation";
+import { createStudioPageDraftStore, studioPageDraftKey } from "@/lib/studio-page-drafts";
+import { createStudioNavigationCoordinator, type StudioNavigationTicket } from "@/lib/studio-navigation";
+import { PageManagement, type PageGenerationUiState, type PageRegenerationUiState } from "@/components/page-management";
 import { HeroImageAssetSchema } from "@/lib/site-image";
 import { heroImageForProject, type ProjectHeroImageState } from "@/lib/project-hero-image";
 import { DEFAULT_SITE_TEMPLATE, FashionSiteTemplateSchema, initializeFashionNavigation, initializeRealEstateNavigation, initializeRestaurantNavigation, RealEstateSiteTemplateSchema, RestaurantSiteTemplateSchema, type FashionContent, type RealEstateContent, type RestaurantContent, type SiteTemplate, type SiteTemplateId } from "@/lib/site-templates";
+
+function createEmptyPageGenerationState(): PageGenerationUiState {
+  return {
+    home: { loading: false, error: "" },
+    about: { loading: false, error: "" },
+    services: { loading: false, error: "" },
+    products: { loading: false, error: "" },
+    contact: { loading: false, error: "" },
+  };
+}
+
+function createEmptyPageRegenerationState(): PageRegenerationUiState {
+  return {
+    home: { loading: false, error: "" },
+    about: { loading: false, error: "" },
+    services: { loading: false, error: "" },
+    products: { loading: false, error: "" },
+    contact: { loading: false, error: "" },
+  };
+}
 
 export default function Home() {
   const [brief, setBrief] = useState<BusinessBrief>(EMPTY_BRIEF);
@@ -31,7 +62,13 @@ export default function Home() {
   const [layout, setLayout] = useState<GeneratedPage["layout"]>("editorial");
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
   const [siteTemplate, setSiteTemplate] = useState<SiteTemplate>(DEFAULT_SITE_TEMPLATE);
+  const [projectPages, setProjectPages] = useState<ProjectPage[]>([]);
+  const [selectedPageId, setSelectedPageId] = useState("home");
+  const [pageGenerationState, setPageGenerationState] = useState<PageGenerationUiState>(() => createEmptyPageGenerationState());
+  const [pageRegenerationState, setPageRegenerationState] = useState<PageRegenerationUiState>(createEmptyPageRegenerationState);
   const [restaurantEditorRevision, setRestaurantEditorRevision] = useState(0);
+  const [pageEditorRevisions, setPageEditorRevisions] = useState<Record<string, number>>({});
+  const [templateValidityRevision, setTemplateValidityRevision] = useState(0);
   const [templateContentValid, setTemplateContentValid] = useState(true);
   const [projectHeroImage, setProjectHeroImage] = useState<ProjectHeroImageState>({ projectId: null, image: null });
   const [heroImageState, setHeroImageState] = useState({ loading: false, error: "" });
@@ -39,6 +76,8 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [sectionState, setSectionState] = useState<SectionRequestState>(createEmptySectionRequestState);
   const [requestCoordinator] = useState(createStudioRequestCoordinator);
+  const [pageGenerationCoordinator] = useState(createPageGenerationCoordinator);
+  const [navigationCoordinator] = useState(createStudioNavigationCoordinator);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const heroImage = heroImageForProject(projectHeroImage, activeProjectId);
@@ -54,10 +93,48 @@ export default function Home() {
   const [pendingTransition, setPendingTransition] = useState<ProjectTransition | null>(null);
   const pendingTransitionRef = useRef<ProjectTransition | null>(null);
   const projectStorageRef = useRef<ProjectStorage | null>(null);
+  const projectPagesRef = useRef<ProjectPage[]>([]);
+  const pageDraftsRef = useRef(createStudioPageDraftStore<GeneratedPage>());
   const activeProjectIdRef = useRef<string | null>(null);
+  const selectedPageIdRef = useRef("home");
   const activeProjectRevisionRef = useRef(0);
   const dirtyRevisionRef = useRef(0);
   const isDirtyRef = useRef(false);
+
+  function setPages(pages: ProjectPage[]) {
+    projectPagesRef.current = pages;
+    setProjectPages(pages);
+  }
+
+  const currentPagesForSnapshot = useCallback((): ProjectPage[] => {
+    if (!page) throw new Error("A website page is required before saving.");
+    const pages = projectPagesRef.current;
+    const current = pages.find((record) => record.id === selectedPageId);
+    if (!current && selectedPageId !== "home") throw new Error("The selected page is no longer available.");
+    const content = ProjectPageContentSchema.parse({
+      headline: page.headline,
+      description: page.subheadline,
+      features: page.features,
+      callToAction: page.callToAction,
+    });
+    const edited = ProjectPageSchema.parse({
+      ...(current ?? { id: "home", slug: "index", title: "Home", kind: "home" }),
+      content,
+      template: templateContentValid ? siteTemplate : current?.template ?? siteTemplate,
+    });
+    if (!current) return [edited];
+    return pages.map((record) => record.id === selectedPageId ? edited : record);
+  }, [page, selectedPageId, siteTemplate, templateContentValid]);
+
+  const allPageDraftsValid = useCallback(() => {
+    return pageDraftsRef.current.areAllDraftsValid((draft) => ProjectPageContentSchema.safeParse({ headline: draft.headline, description: draft.subheadline, features: draft.features, callToAction: draft.callToAction }).success);
+  }, []);
+
+  function invalidatePageGenerationForContextChange() {
+    pageGenerationCoordinator.invalidateForContextChange();
+    setPageGenerationState(createEmptyPageGenerationState());
+    setPageRegenerationState(createEmptyPageRegenerationState());
+  }
 
   function generationContextKey() {
     return requestCoordinator.generationContextKey(activeProjectIdRef.current);
@@ -131,6 +208,13 @@ export default function Home() {
   }
 
   function clearActiveProjectToDraft() {
+    navigationCoordinator.invalidate();
+    pageGenerationCoordinator.invalidateForProjectTransition();
+    setPageGenerationState(createEmptyPageGenerationState());
+    setPageRegenerationState(createEmptyPageRegenerationState());
+    pageDraftsRef.current.clear();
+    setPageEditorRevisions({});
+    setTemplateValidityRevision((revision) => revision + 1);
     requestCoordinator.projectTransition(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
@@ -144,6 +228,9 @@ export default function Home() {
     setActiveProjectRevision(0);
     setBrief(EMPTY_BRIEF);
     setPage(null);
+    setPages([]);
+    selectedPageIdRef.current = "home";
+    setSelectedPageId("home");
     setLayout("editorial");
     setSiteSettings(DEFAULT_SITE_SETTINGS);
     setSiteTemplate(DEFAULT_SITE_TEMPLATE);
@@ -157,6 +244,13 @@ export default function Home() {
   }
 
   function applyProject(project: ProjectRecord) {
+    navigationCoordinator.invalidate();
+    pageGenerationCoordinator.invalidateForProjectTransition();
+    setPageGenerationState(createEmptyPageGenerationState());
+    setPageRegenerationState(createEmptyPageRegenerationState());
+    pageDraftsRef.current.clear();
+    setPageEditorRevisions({});
+    setTemplateValidityRevision((revision) => revision + 1);
     requestCoordinator.projectTransition(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
@@ -170,9 +264,12 @@ export default function Home() {
     setActiveProjectRevision(project.revision);
     setBrief(project.brief);
     setPage(pageFromProject(project));
+    setPages(project.pages);
+    selectedPageIdRef.current = "home";
+    setSelectedPageId("home");
     setLayout(project.layout);
     const savedSettings = SiteSettingsSchema.parse(project.siteSettings);
-    const savedTemplate = project.template;
+    const savedTemplate = siteTemplateFromProject(project);
     setSiteSettings(savedTemplate.id === "restaurant"
       ? initializeRestaurantNavigation(savedSettings, savedTemplate.content)
       : savedTemplate.id === "fashion"
@@ -189,6 +286,76 @@ export default function Home() {
     setNotice("");
     setProjectStorageError("");
     setProjectManagerOpen(false);
+  }
+
+  function selectStudioPage(pageId: string, navigationTicket?: StudioNavigationTicket) {
+    if (navigationTicket) {
+      if (!navigationCoordinator.isCurrent(navigationTicket, activeProjectIdRef.current, pageId)) return;
+    } else {
+      navigationCoordinator.invalidate();
+    }
+    const currentPageId = selectedPageIdRef.current;
+    const current = projectPagesRef.current.find((record) => record.id === currentPageId);
+    if (!current || !page) return;
+    const currentDraftKey = studioPageDraftKey(activeProjectIdRef.current, current.id);
+    const targetDraftKey = studioPageDraftKey(activeProjectIdRef.current, pageId);
+    pageDraftsRef.current.setDraft(currentDraftKey, page);
+    const selection = resolveStudioPageSelection({
+      pages: projectPagesRef.current,
+      currentPageId,
+      targetPageId: pageId,
+      currentPage: page,
+      currentTemplate: siteTemplate,
+      currentTemplateValid: templateContentValid,
+      targetDraft: pageDraftsRef.current.getDraft(targetDraftKey),
+      targetTemplateValid: pageDraftsRef.current.isTemplateValid(targetDraftKey),
+      brief,
+      layout,
+    });
+    if (!selection) return;
+    requestCoordinator.pageSelected(
+      () => setLoading(false),
+      () => setSectionState(createEmptySectionRequestState()),
+    );
+    setPages(selection.pages);
+    selectedPageIdRef.current = pageId;
+    setSelectedPageId(pageId);
+    setPage(selection.page);
+    setSiteTemplate(selection.template);
+    setTemplateContentValid(selection.templateValid);
+    setNotice("");
+    if (navigationTicket?.anchor) scheduleStudioAnchorScroll(navigationTicket);
+    else if (navigationTicket) navigationCoordinator.finish(navigationTicket);
+  }
+
+  function scheduleStudioAnchorScroll(ticket: StudioNavigationTicket) {
+    let attempts = 0;
+    const tryScroll = () => window.requestAnimationFrame(() => {
+      if (!navigationCoordinator.isCurrent(ticket, activeProjectIdRef.current, selectedPageIdRef.current)) return;
+      const root = Array.from(document.querySelectorAll<HTMLElement>("[data-site-preview-page]")).find((candidate) => candidate.dataset.sitePreviewPage === ticket.pageId);
+      const target = root && Array.from(root.querySelectorAll<HTMLElement>("[id]")).find((element) => `#${element.id}` === ticket.anchor);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        navigationCoordinator.finish(ticket);
+        return;
+      }
+      if (attempts++ < 5) tryScroll();
+      else navigationCoordinator.finish(ticket);
+    });
+    tryScroll();
+  }
+
+  function navigatePreview(pageId: string, anchor?: string) {
+    const destinationPage = projectPagesRef.current.find((candidate) => candidate.id === pageId);
+    if (!destinationPage) return;
+    if (anchor && !siteNavigationDestinationOptions(destinationPage.template, destinationPage.kind).some((option) => option.destination === anchor)) return;
+    const ticket = navigationCoordinator.begin(activeProjectIdRef.current, pageId, anchor);
+    if (pageId === selectedPageIdRef.current) {
+      if (anchor) scheduleStudioAnchorScroll(ticket);
+      else navigationCoordinator.finish(ticket);
+      return;
+    }
+    selectStudioPage(pageId, ticket);
   }
 
   function performTransition(transition: ProjectTransition) {
@@ -228,9 +395,9 @@ export default function Home() {
   }
 
   function saveCurrentProject() {
-    if (!templateContentValid) {
+    if (!templateContentValid || !allPageDraftsValid()) {
       setSaveStatus("error");
-      setProjectStorageError("Correct the template content fields before saving this project.");
+      setProjectStorageError("Correct all page content fields before saving this project. Invalid drafts remain available on their pages.");
       return false;
     }
     if (!page) {
@@ -244,13 +411,16 @@ export default function Home() {
         setProjectStorageError(contrast.issues.join(" "));
         return false;
       }
-      const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImageForProject(projectHeroImage, activeProjectIdRef.current), siteTemplate);
+      const snapshot = projectSnapshotFromPages(brief, currentPagesForSnapshot(), layout, siteSettings, heroImageForProject(projectHeroImage, activeProjectIdRef.current));
       const storage = getProjectStorage();
       const creatingProject = activeProjectIdRef.current === null;
       const saved = activeProjectIdRef.current
         ? storage.save(activeProjectIdRef.current, snapshot, activeProjectRevisionRef.current)
         : storage.create(brief.businessName, snapshot);
       if (creatingProject) {
+        pageGenerationCoordinator.invalidateForProjectTransition();
+        setPageGenerationState(createEmptyPageGenerationState());
+        setPageRegenerationState(createEmptyPageRegenerationState());
         requestCoordinator.projectTransition(
           () => setLoading(false),
           () => setSectionState(createEmptySectionRequestState()),
@@ -349,7 +519,11 @@ export default function Home() {
       return;
     }
     const settings = SiteSettingsSchema.parse({ ...siteSettings, ctaDestination: destination });
-    const exported = createWebsiteExport(page, layout, settings, heroImageForProject(projectHeroImage, activeProjectIdRef.current), siteTemplate);
+    const exported = createWebsiteExport(page, layout, settings, heroImageForProject(projectHeroImage, activeProjectIdRef.current), siteTemplate, {
+      currentPageId: selectedPageIdRef.current,
+      pageKind: projectPagesRef.current.find((record) => record.id === selectedPageIdRef.current)?.kind ?? "home",
+      pages: projectPagesRef.current,
+    });
     const blob = new Blob([exported.html], { type: "text/html;charset=utf-8" });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -363,7 +537,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!activeProjectId || !isDirty || !page || pendingTransition || !templateContentValid) return;
+    if (!activeProjectId || !isDirty || !page || pendingTransition || !templateContentValid || !allPageDraftsValid()) return;
     const projectId = activeProjectId;
     const expectedRevision = activeProjectRevision;
     const version = dirtyRevision;
@@ -377,7 +551,7 @@ export default function Home() {
           setProjectStorageError(contrast.issues.join(" "));
           return;
         }
-        const snapshot = projectSnapshotFromPage(brief, page, layout, siteSettings, heroImageForProject(projectHeroImage, projectId), siteTemplate);
+       const snapshot = projectSnapshotFromPages(brief, currentPagesForSnapshot(), layout, siteSettings, heroImageForProject(projectHeroImage, projectId));
         const saved = getProjectStorage().save(projectId, snapshot, expectedRevision);
         if (dirtyRevisionRef.current !== version || activeProjectIdRef.current !== projectId) return;
         activeProjectRevisionRef.current = saved.revision;
@@ -394,9 +568,10 @@ export default function Home() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [activeProjectId, activeProjectRevision, brief, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, projectHeroImage, refreshProjects, safeStorageMessage, siteSettings, siteTemplate, templateContentValid]);
+  }, [activeProjectId, activeProjectRevision, allPageDraftsValid, brief, currentPagesForSnapshot, dirtyRevision, getProjectStorage, isDirty, layout, page, pendingTransition, projectHeroImage, projectPages, refreshProjects, safeStorageMessage, siteSettings, siteTemplate, templateContentValid, templateValidityRevision]);
 
   function updateBrief<K extends keyof BusinessBrief>(key: K, value: BusinessBrief[K]) {
+    invalidatePageGenerationForContextChange();
     requestCoordinator.briefChanged(
       () => setLoading(false),
       () => setSectionState(createEmptySectionRequestState()),
@@ -418,6 +593,10 @@ export default function Home() {
 
   async function submit(event: FormEvent<HTMLFormElement>, templateId: SiteTemplateId = "generic") {
     event.preventDefault();
+    if (selectedPageId !== "home") {
+      setNotice("Select Home to generate or replace the home page.");
+      return;
+    }
     if (!templateContentValid) {
       setNotice("Correct the template content fields before generating another page.");
       return;
@@ -426,6 +605,7 @@ export default function Home() {
     const projectId = activeProjectIdRef.current;
     const requestBrief = brief;
     const requestLayout = layout;
+    invalidatePageGenerationForContextChange();
     const identity = requestCoordinator.beginGeneration(projectId);
     setNotice("");
     setLoading(true);
@@ -483,9 +663,32 @@ export default function Home() {
     }, (generated) => {
       if (!isCurrent()) return;
       invalidateSectionResponses();
+      const home = ProjectPageSchema.parse({
+        id: "home",
+        slug: "index",
+        title: "Home",
+        kind: "home",
+        content: {
+          headline: generated.page.headline,
+          description: generated.page.subheadline,
+          features: generated.page.features,
+          callToAction: generated.page.callToAction,
+        },
+        template: generated.template,
+      });
+      const existingPages = projectPagesRef.current;
+      setPages(existingPages.some((record) => record.id === "home")
+        ? existingPages.map((record) => record.id === "home" ? home : record)
+        : [home, ...existingPages]);
+      const homeDraftKey = studioPageDraftKey(activeProjectIdRef.current, "home");
+      pageDraftsRef.current.deleteDraft(homeDraftKey);
+      pageDraftsRef.current.deleteTemplateValidity(homeDraftKey);
+      setTemplateValidityRevision((revision) => revision + 1);
+      setPageEditorRevisions((current) => ({ ...current, home: (current.home ?? 0) + 1 }));
+      selectedPageIdRef.current = "home";
+      setSelectedPageId("home");
       setPage((current) => isCurrent() ? { ...generated.page, layout: requestLayout } : current);
       setSiteTemplate(generated.template);
-      setRestaurantEditorRevision((revision) => revision + 1);
       setTemplateContentValid(true);
       if (generated.template.id === "restaurant") {
         const restaurantContent = generated.template.content;
@@ -527,6 +730,115 @@ export default function Home() {
     }, () => setLoading(false));
   }
 
+  async function generateAdditionalPage(kind: AddablePageKind) {
+    const projectId = activeProjectIdRef.current;
+    const ticket = pageGenerationCoordinator.begin(projectId, kind);
+    if (!ticket) return;
+    const isCurrent = () => pageGenerationCoordinator.isCurrent(ticket, activeProjectIdRef.current);
+    setPageGenerationState((current) => ({ ...current, [kind]: { loading: true, error: "" } }));
+    try {
+      const result = await runStudioPageGeneration({
+        kind,
+        brief,
+        template: siteTemplate,
+        ticket,
+        coordinator: pageGenerationCoordinator,
+        getActiveProjectId: () => activeProjectIdRef.current,
+        getPages: () => projectPagesRef.current,
+        setPages,
+      });
+      if (!isCurrent()) return;
+      if (result.status === "added") {
+        markDirty();
+        setNotice(`${pageKindLabel(kind, siteTemplate.id)} page added.`);
+      } else if (result.status === "failed") {
+        setPageGenerationState((current) => ({ ...current, [kind]: { loading: true, error: result.message ?? "We couldn’t generate this page right now. Please try again." } }));
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+      const safeError = error instanceof Error && [
+        "This page type is not available for the current template.",
+        "The generation service returned invalid page content. Please try again.",
+        "This page already exists or cannot be added to this project.",
+      ].includes(error.message) ? error.message : "We couldn’t generate this page right now. Please try again.";
+      setPageGenerationState((current) => ({
+        ...current,
+        [kind]: {
+          loading: true,
+          error: safeError,
+        },
+      }));
+    } finally {
+      const wasCurrent = isCurrent();
+      pageGenerationCoordinator.finish(ticket);
+      if (wasCurrent) setPageGenerationState((current) => ({ ...current, [kind]: { ...current[kind], loading: false } }));
+    }
+  }
+
+  async function regenerateStudioPage(pageId: string) {
+    if (loading || Object.values(sectionState).some((state) => state.loading)) return;
+    const target = projectPagesRef.current.find((record) => record.id === pageId);
+    if (!target || target.kind === "legacy") return;
+    const draftKey = studioPageDraftKey(activeProjectIdRef.current, target.id);
+    const copyDraft = pageDraftsRef.current.getDraft(draftKey);
+    if ((copyDraft && !ProjectPageContentSchema.safeParse({ headline: copyDraft.headline, description: copyDraft.subheadline, features: copyDraft.features, callToAction: copyDraft.callToAction }).success)
+      || !pageDraftsRef.current.isTemplateValid(draftKey)) {
+      setPageRegenerationState((current) => ({ ...current, [pageId]: { loading: false, error: "Correct this page’s invalid edits before regenerating it." } }));
+      return;
+    }
+    const projectId = activeProjectIdRef.current;
+    const ticket = pageGenerationCoordinator.begin(projectId, target.kind);
+    if (!ticket) return;
+    if (pageId === selectedPageId) {
+      requestCoordinator.pageReplaced(() => setSectionState(createEmptySectionRequestState()));
+    }
+    const isCurrent = () => pageGenerationCoordinator.isCurrent(ticket, activeProjectIdRef.current);
+    setPageRegenerationState((current) => ({ ...current, [pageId]: { loading: true, error: "" } }));
+    try {
+      const result = await runStudioPageRegeneration({
+        target,
+        brief,
+        ticket,
+        coordinator: pageGenerationCoordinator,
+        getActiveProjectId: () => activeProjectIdRef.current,
+        getPages: () => projectPagesRef.current,
+        setPages,
+      });
+      if (!isCurrent()) return;
+      if (result.status === "regenerated") {
+        const updated = projectPagesRef.current.find((record) => record.id === pageId);
+        if (!updated) return;
+        pageDraftsRef.current.deleteDraft(draftKey);
+        pageDraftsRef.current.deleteTemplateValidity(draftKey);
+        setTemplateValidityRevision((revision) => revision + 1);
+        setPageEditorRevisions((current) => ({ ...current, [pageId]: (current[pageId] ?? 0) + 1 }));
+        if (selectedPageIdRef.current === pageId) {
+          requestCoordinator.pageReplaced(() => setSectionState(createEmptySectionRequestState()));
+          setPage(GeneratedPageSchema.parse({
+            ...brief,
+            headline: updated.content.headline,
+            subheadline: updated.content.description,
+            features: updated.content.features,
+            callToAction: updated.content.callToAction,
+            layout,
+          }));
+          setSiteTemplate(updated.template);
+          setTemplateContentValid(true);
+        }
+        markDirty();
+        setNotice(`${updated.title} page regenerated.`);
+      } else if (result.status === "failed") {
+        setPageRegenerationState((current) => ({ ...current, [pageId]: { loading: true, error: result.message ?? "We couldn’t regenerate this page right now. Please try again." } }));
+      }
+    } catch {
+      if (isCurrent()) setPageRegenerationState((current) => ({ ...current, [pageId]: { loading: true, error: "We couldn’t regenerate this page right now. Please try again." } }));
+    } finally {
+      const wasCurrent = isCurrent();
+      pageGenerationCoordinator.finish(ticket);
+      if (wasCurrent) setPageRegenerationState((current) => ({ ...current, [pageId]: { ...current[pageId], loading: false } }));
+    }
+  }
+
   function changeLayout(next: GeneratedPage["layout"]) {
     requestCoordinator.layoutChanged(() => setLoading(false));
     setLayout(next);
@@ -539,7 +851,7 @@ export default function Home() {
     markDirty();
   }
 
-  function editNavigation(index: number, field: "label" | "destination", value: string) {
+  function editNavigation(index: number, field: "label", value: string) {
     editSiteSettings((current) => ({
       ...current,
       navigation: current.navigation.map((entry, entryIndex) => entryIndex === index
@@ -548,50 +860,82 @@ export default function Home() {
     }));
   }
 
+  function editNavigationTarget(index: number, target: SiteNavigationTarget) {
+    editSiteSettings((current) => ({
+      ...current,
+      navigation: current.navigation.map((entry, entryIndex) => entryIndex === index
+        ? siteNavigationEntryWithTarget(entry, target)
+        : entry) as SiteSettings["navigation"],
+    }));
+  }
+
   function editCtaDestination(value: string) {
     editSiteSettings((current) => ({ ...current, ctaDestination: value }));
   }
 
-  function editRestaurantContent(content: RestaurantContent | null) {
-    setTemplateContentValid(content !== null);
-    if (content && siteTemplate.id === "restaurant") {
-      setSiteTemplate({ id: "restaurant", content });
+  function setTemplatePageContent(pageId: string, template: SiteTemplate | null) {
+    const key = studioPageDraftKey(activeProjectIdRef.current, pageId);
+    const record = projectPagesRef.current.find((candidate) => candidate.id === pageId);
+    pageDraftsRef.current.setTemplateValid(key, template !== null);
+    setTemplateValidityRevision((revision) => revision + 1);
+    if (pageId === selectedPageId) setTemplateContentValid(template !== null);
+    if (record && template && template.id === record.template.id) {
+      const updatedPages = updateProjectPage(projectPagesRef.current, pageId, (current) => ({ ...current, template }));
+      if (updatedPages) {
+        setPages(updatedPages);
+        if (pageId === selectedPageId) setSiteTemplate(updatedPages.find((candidate) => candidate.id === pageId)!.template);
+      }
+    }
+    if (record && record.kind !== "legacy") {
+      pageGenerationCoordinator.invalidatePage(activeProjectIdRef.current, record.kind);
+      setPageRegenerationState((current) => ({ ...current, [pageId]: { loading: false, error: "" } }));
     }
     markDirty();
   }
 
-  function editFashionContent(content: FashionContent | null) {
-    setTemplateContentValid(content !== null);
-    if (content && siteTemplate.id === "fashion") {
-      setSiteTemplate({ id: "fashion", content });
-    }
-    markDirty();
+  function editRestaurantContent(pageId: string, content: RestaurantContent | null) {
+    const record = projectPagesRef.current.find((candidate) => candidate.id === pageId);
+    if (record?.template.id === "restaurant") setTemplatePageContent(pageId, content ? { id: "restaurant", content } : null);
   }
 
-  function editRealEstateContent(content: RealEstateContent | null) {
-    setTemplateContentValid(content !== null);
-    if (content && siteTemplate.id === "real-estate") {
-      setSiteTemplate({ id: "real-estate", content });
-      setSiteSettings((current) => initializeRealEstateNavigation(current, content));
-    }
-    markDirty();
+  function editFashionContent(pageId: string, content: FashionContent | null) {
+    const record = projectPagesRef.current.find((candidate) => candidate.id === pageId);
+    if (record?.template.id === "fashion") setTemplatePageContent(pageId, content ? { id: "fashion", content } : null);
+  }
+
+  function editRealEstateContent(pageId: string, content: RealEstateContent | null) {
+    const record = projectPagesRef.current.find((candidate) => candidate.id === pageId);
+    if (record?.template.id === "real-estate") setTemplatePageContent(pageId, content ? { id: "real-estate", content } : null);
   }
 
   function editGeneratedSection(section: EditableSection, value: string, featureIndex?: number) {
     requestCoordinator.contentEdited(section, () => setLoading(false));
-    setPage((current) => {
-      if (!current) return current;
-      if (section === "headline") return { ...current, headline: value };
-      if (section === "description") return { ...current, subheadline: value };
-      if (section === "callToAction") return { ...current, callToAction: value };
-      if (featureIndex === undefined) return current;
-      return { ...current, features: current.features.map((feature, index) => index === featureIndex ? value : feature) };
-    });
+    if (!page) return;
+    let updated: GeneratedPage;
+    if (section === "headline") updated = { ...page, headline: value };
+    else if (section === "description") updated = { ...page, subheadline: value };
+    else if (section === "callToAction") updated = { ...page, callToAction: value };
+    else if (featureIndex !== undefined) updated = { ...page, features: page.features.map((feature, index) => index === featureIndex ? value : feature) };
+    else return;
+    setPage(updated);
+    const key = studioPageDraftKey(activeProjectIdRef.current, selectedPageId);
+    pageDraftsRef.current.setDraft(key, updated);
+    const parsedContent = ProjectPageContentSchema.safeParse({ headline: updated.headline, description: updated.subheadline, features: updated.features, callToAction: updated.callToAction });
+    const record = projectPagesRef.current.find((candidate) => candidate.id === selectedPageId);
+    if (parsedContent.success && record) {
+      const updatedPages = updateProjectPage(projectPagesRef.current, selectedPageId, (current) => ({ ...current, content: parsedContent.data }));
+      if (updatedPages) setPages(updatedPages);
+    }
+    if (record && record.kind !== "legacy") {
+      pageGenerationCoordinator.invalidatePage(activeProjectIdRef.current, record.kind);
+      setPageRegenerationState((current) => ({ ...current, [record.id]: { loading: false, error: "" } }));
+    }
     markDirty();
     setSectionState((current) => ({ ...current, [section]: { ...current[section], error: "" } }));
   }
 
   async function regenerateSection(section: EditableSection) {
+    if (loading || pageGenerationState.home.loading || pageRegenerationState.home?.loading) return;
     const projectId = activeProjectIdRef.current;
     const requestBrief = brief;
     const ticket = requestCoordinator.beginSection(section, projectId);
@@ -710,11 +1054,22 @@ export default function Home() {
             <div><strong>{activeProjectName || "Untitled website"}</strong><span className={`save-indicator ${isDirty ? "unsaved" : ""}`} role="status" aria-live="polite">{saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Not saved" : isDirty ? activeProjectId ? "Unsaved changes" : "Unsaved draft" : activeProjectId ? "Saved" : "Not saved yet"}</span></div>
             <div className="project-toolbar-actions"><button type="button" onClick={() => setExportDialogOpen(true)} disabled={!page || !templateContentValid}>Export HTML</button><button type="button" onClick={saveCurrentProject} disabled={!page || saveStatus === "saving"}>Save Project</button><button type="button" onClick={showProjectManager}>My Projects</button><button type="button" onClick={confirmNewProject}>New Project</button></div>
           </div>
+          {page && projectPages.length > 0 && <PageManagement
+            pages={projectPages}
+            activePageId={selectedPageId}
+            templateId={siteTemplate.id}
+            generationState={pageGenerationState}
+            regenerationState={pageRegenerationState}
+            canRegenerate={!loading && !Object.values(sectionState).some((state) => state.loading)}
+            onSelectPage={selectStudioPage}
+            onGeneratePage={generateAdditionalPage}
+            onRegeneratePage={regenerateStudioPage}
+          />}
           {projectStorageError && <p className="project-storage-error page-storage-error" role="alert">{projectStorageError}</p>}
           <div className="prototype-note"><span className="note-icon">✦</span><span><strong>AI-powered page concepts.</strong> Your brief is used to create landing-page copy. Review generated content before publishing.</span><button type="button" aria-label="Dismiss generation note" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>
           <div className="studio-grid" id="brief">
             <BriefForm brief={brief} onChange={updateBrief} onSubmit={submit} loading={loading} />
-          <WebsitePreview page={page} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onCtaDestinationChange={editCtaDestination} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} heroImage={heroImage} heroImageState={heroImageState} onGenerateHeroImage={generateHeroImage} onRemoveHeroImage={removeHeroImage} template={siteTemplate} activeProjectId={activeProjectId} restaurantEditorRevision={restaurantEditorRevision} onRestaurantContentChange={editRestaurantContent} onFashionContentChange={editFashionContent} onRealEstateContentChange={editRealEstateContent} />
+      <WebsitePreview page={page} pageEditable={Boolean(page)} pages={projectPages} selectedPageId={selectedPageId} allowSectionRegeneration={selectedPageId === "home" && !loading && !pageRegenerationState.home.loading} layout={layout} style={brief.style} appearance={siteSettings.appearance} onAppearanceChange={updateAppearance} siteSettings={siteSettings} onSiteSettingChange={editNavigation} onSiteNavigationTargetChange={editNavigationTarget} onCtaDestinationChange={editCtaDestination} onPreviewNavigate={navigatePreview} onLayoutChange={changeLayout} loading={loading} sectionState={sectionState} onEdit={editGeneratedSection} onRegenerate={regenerateSection} heroImage={heroImage} heroImageState={heroImageState} onGenerateHeroImage={generateHeroImage} onRemoveHeroImage={removeHeroImage} template={siteTemplate} activeProjectId={activeProjectId} restaurantEditorRevision={restaurantEditorRevision} pageEditorRevisions={pageEditorRevisions} onRestaurantContentChange={editRestaurantContent} onFashionContentChange={editFashionContent} onRealEstateContentChange={editRealEstateContent} />
           </div>
           {notice && <p className={`generation-notice ${notice.includes("ready") ? "success" : ""}`} role="status" aria-live="polite">{notice}</p>}
           <footer className="page-footer"><span>© 2025 WebLander AI</span><span>Built for the next big thing <b>✦</b></span><a href="#brief">Feedback <span>↗</span></a></footer>

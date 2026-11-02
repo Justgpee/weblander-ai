@@ -179,6 +179,10 @@ export function createStudioRequestCoordinator() {
     pageReplaced(onSectionsReset?: () => void) {
       invalidateSections(onSectionsReset);
     },
+    pageSelected(onGenerationInvalidated?: () => void, onSectionsReset?: () => void) {
+      invalidateGeneration(onGenerationInvalidated);
+      invalidateSections(onSectionsReset);
+    },
     isSectionInFlight(section: EditableSection) {
       return inFlightSections.has(section);
     },

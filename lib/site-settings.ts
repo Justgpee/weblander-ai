@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { VisualStyleSchema, type VisualStyle } from "@/lib/generation";
 
-export const SAFE_SITE_ANCHORS = ["#top", "#site-headline", "#site-story", "#site-menu", "#site-visit", "#site-collections", "#site-brand-story", "#site-properties", "#site-agency-story"] as const;
+export const SAFE_SITE_ANCHORS = ["#top", "#site-headline", "#site-about", "#site-contact", "#site-story", "#site-menu", "#site-visit", "#site-collections", "#site-brand-story", "#site-properties", "#site-agency-story", "#site-services", "#site-products"] as const;
 
 export const SITE_STYLE_PALETTES: Record<VisualStyle, { primary: string; background: string; accent: string }> = {
   Minimalist: { primary: "#283026", background: "#f1f0e9", accent: "#63745a" },
@@ -159,10 +159,78 @@ export function validateSiteDestination(value: string): string | undefined {
   return new URL(destination).href;
 }
 
+const NavigationPageIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,39}$/);
+const SafeExternalNavigationUrlSchema = z.string().trim().max(2048).refine((value) => {
+  if (!value || /^[\\/]{2}/.test(value) || /[\\\u0000-\u001f\u007f]/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}, "Enter a safe HTTP(S) URL without credentials.");
+
+export const SiteNavigationTargetSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("none") }).strict(),
+  z.object({ type: z.literal("external"), url: SafeExternalNavigationUrlSchema }).strict(),
+  z.object({ type: z.literal("page"), pageId: NavigationPageIdSchema }).strict(),
+  z.object({ type: z.literal("section"), pageId: NavigationPageIdSchema, anchor: z.enum(SAFE_SITE_ANCHORS) }).strict(),
+  z.object({ type: z.literal("unresolved"), value: z.enum(SAFE_SITE_ANCHORS) }).strict(),
+]);
+export type SiteNavigationTarget = z.infer<typeof SiteNavigationTargetSchema>;
+
 export const SiteNavigationEntrySchema = z.object({
   label: z.string().trim().min(1).max(40),
   destination: SiteDestinationSchema,
+  // Transitional studio projection retained until the navigation editor is
+  // migrated. Persisted v10 records require a typed target below.
+  target: SiteNavigationTargetSchema.optional(),
 }).strict();
+
+/** Frozen collection-v9 settings. Navigation destinations were safe strings. */
+export const SiteSettingsV9Schema = z.object({
+  navigation: z.tuple([
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+  ]),
+  ctaDestination: SiteDestinationSchema,
+  appearance: AppearanceSchema,
+}).strict();
+
+/** Strict persisted collection-v10 shape. `destination` is a legacy projection
+ * for current callers; `target` is authoritative and supports page navigation. */
+function targetLegacyDestination(target: SiteNavigationTarget) {
+  switch (target.type) {
+    case "none":
+    case "page": return "";
+    case "external": return new URL(target.url).href;
+    case "section": return target.pageId === "home" ? target.anchor : "";
+    case "unresolved": return target.value;
+  }
+}
+
+export const SiteSettingsV10Schema = z.object({
+  navigation: z.tuple([
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema, target: SiteNavigationTargetSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema, target: SiteNavigationTargetSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema, target: SiteNavigationTargetSchema }).strict(),
+  ]),
+  ctaDestination: SiteDestinationSchema,
+  appearance: AppearanceSchema,
+}).strict().superRefine((settings, context) => {
+  settings.navigation.forEach((entry, index) => {
+    const destination = SiteDestinationSchema.parse(entry.destination);
+    const compatibleDestination = targetLegacyDestination(entry.target);
+    const matches = entry.target.type === "external"
+      ? destination.startsWith("http://") || destination.startsWith("https://")
+        ? new URL(destination).href === compatibleDestination
+        : false
+      : destination === compatibleDestination;
+    if (!matches) context.addIssue({ code: "custom", path: ["navigation", index, "target"], message: "The compatibility destination must match its typed target." });
+  });
+});
+export type SiteSettingsV10 = z.infer<typeof SiteSettingsV10Schema>;
 
 export const SiteSettingsSchema = z.object({
   navigation: z.tuple([
@@ -176,7 +244,11 @@ export const SiteSettingsSchema = z.object({
 
 /** Strict shape of collection-v2 site settings, retained for migration only. */
 export const SiteSettingsV2Schema = z.object({
-  navigation: z.tuple([SiteNavigationEntrySchema, SiteNavigationEntrySchema, SiteNavigationEntrySchema]),
+  navigation: z.tuple([
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+    z.object({ label: z.string().trim().min(1).max(40), destination: SiteDestinationSchema }).strict(),
+  ]),
   ctaDestination: SiteDestinationSchema,
 }).strict();
 

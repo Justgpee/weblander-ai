@@ -5,13 +5,15 @@ import { restaurantContentToDraft, validateRestaurantContentDraft, type Restaura
 import type { RestaurantContent } from "@/lib/site-templates";
 
 type RestaurantEditorProps = {
+  pageId: string;
   content: RestaurantContent;
   onChange: (content: RestaurantContent | null) => void;
 };
 
-export function RestaurantEditor({ content, onChange }: RestaurantEditorProps) {
+export function RestaurantEditor({ pageId, content, onChange }: RestaurantEditorProps) {
   const [draft, setDraft] = useState<RestaurantContentDraft>(() => restaurantContentToDraft(content));
   const validation = validateRestaurantContentDraft(draft);
+  const idPrefix = `${pageId}-restaurant`;
 
   function update(next: RestaurantContentDraft) {
     setDraft(next);
@@ -44,8 +46,8 @@ export function RestaurantEditor({ content, onChange }: RestaurantEditorProps) {
           {draft.menuHighlights.map((highlight, index) => {
             const nameError = fieldError(`Menu highlight ${index + 1} name`);
             const descriptionError = fieldError(`Menu highlight ${index + 1} description`);
-            const nameId = `restaurant-menu-name-${index}`;
-            const descriptionId = `restaurant-menu-description-${index}`;
+            const nameId = `${idPrefix}-menu-name-${index}`;
+            const descriptionId = `${idPrefix}-menu-description-${index}`;
             return (
               <fieldset className="restaurant-editor-dish" key={index}>
                 <legend>Menu highlight {index + 1}</legend>
@@ -64,18 +66,18 @@ export function RestaurantEditor({ content, onChange }: RestaurantEditorProps) {
         </div>
         {validation.errors.some((error) => error === "Keep between two and four menu highlights.") && <p className="restaurant-editor-error" role="alert">Keep between two and four menu highlights. A saved restaurant project needs at least two valid dishes.</p>}
 
-        <label className="restaurant-editor-field" htmlFor="restaurant-story">Restaurant story <span>Optional; leave blank to omit this section.</span>
-          <textarea id="restaurant-story" rows={3} maxLength={600} value={draft.story} onChange={(event) => update({ ...draft, story: event.target.value })} aria-invalid={Boolean(fieldError("Story must"))} aria-describedby={fieldError("Story must") ? "restaurant-story-error" : undefined} />
-          {fieldError("Story must") && <span id="restaurant-story-error" className="site-settings-error">{fieldError("Story must")}</span>}
+        <label className="restaurant-editor-field" htmlFor={`${idPrefix}-story`}>Restaurant story <span>Optional; leave blank to omit this section.</span>
+          <textarea id={`${idPrefix}-story`} rows={3} maxLength={600} value={draft.story} onChange={(event) => update({ ...draft, story: event.target.value })} aria-invalid={Boolean(fieldError("Story must"))} aria-describedby={fieldError("Story must") ? `${idPrefix}-story-error` : undefined} />
+          {fieldError("Story must") && <span id={`${idPrefix}-story-error`} className="site-settings-error">{fieldError("Story must")}</span>}
         </label>
         <div className="restaurant-editor-optionals">
-          <label className="restaurant-editor-field" htmlFor="restaurant-location">Location <span>Optional; only enter a supplied location.</span>
-            <input id="restaurant-location" maxLength={240} value={draft.location} onChange={(event) => update({ ...draft, location: event.target.value })} aria-invalid={Boolean(fieldError("Location must"))} aria-describedby={fieldError("Location must") ? "restaurant-location-error" : undefined} />
-            {fieldError("Location must") && <span id="restaurant-location-error" className="site-settings-error">{fieldError("Location must")}</span>}
+          <label className="restaurant-editor-field" htmlFor={`${idPrefix}-location`}>Location <span>Optional; only enter a supplied location.</span>
+            <input id={`${idPrefix}-location`} maxLength={240} value={draft.location} onChange={(event) => update({ ...draft, location: event.target.value })} aria-invalid={Boolean(fieldError("Location must"))} aria-describedby={fieldError("Location must") ? `${idPrefix}-location-error` : undefined} />
+            {fieldError("Location must") && <span id={`${idPrefix}-location-error`} className="site-settings-error">{fieldError("Location must")}</span>}
           </label>
-          <label className="restaurant-editor-field" htmlFor="restaurant-hours">Opening hours <span>Optional; leave blank to omit.</span>
-            <input id="restaurant-hours" maxLength={240} value={draft.openingHours} onChange={(event) => update({ ...draft, openingHours: event.target.value })} aria-invalid={Boolean(fieldError("Opening hours must"))} aria-describedby={fieldError("Opening hours must") ? "restaurant-hours-error" : undefined} />
-            {fieldError("Opening hours must") && <span id="restaurant-hours-error" className="site-settings-error">{fieldError("Opening hours must")}</span>}
+          <label className="restaurant-editor-field" htmlFor={`${idPrefix}-hours`}>Opening hours <span>Optional; leave blank to omit.</span>
+            <input id={`${idPrefix}-hours`} maxLength={240} value={draft.openingHours} onChange={(event) => update({ ...draft, openingHours: event.target.value })} aria-invalid={Boolean(fieldError("Opening hours must"))} aria-describedby={fieldError("Opening hours must") ? `${idPrefix}-hours-error` : undefined} />
+            {fieldError("Opening hours must") && <span id={`${idPrefix}-hours-error`} className="site-settings-error">{fieldError("Opening hours must")}</span>}
           </label>
         </div>
         {validation.errors.length > 0 && <p className="restaurant-editor-error" role="status">Correct the highlighted restaurant fields before saving or generating another page.</p>}

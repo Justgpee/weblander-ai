@@ -5,13 +5,15 @@ import { fashionContentToDraft, validateFashionContentDraft, type FashionContent
 import type { FashionContent } from "@/lib/site-templates";
 
 type FashionEditorProps = {
+  pageId: string;
   content: FashionContent;
   onChange: (content: FashionContent | null) => void;
 };
 
-export function FashionEditor({ content, onChange }: FashionEditorProps) {
+export function FashionEditor({ pageId, content, onChange }: FashionEditorProps) {
   const [draft, setDraft] = useState<FashionContentDraft>(() => fashionContentToDraft(content));
   const validation = validateFashionContentDraft(draft);
+  const idPrefix = `${pageId}-fashion`;
 
   function update(next: FashionContentDraft) {
     setDraft(next);
@@ -44,8 +46,8 @@ export function FashionEditor({ content, onChange }: FashionEditorProps) {
           {draft.collectionHighlights.map((highlight, index) => {
             const nameError = fieldError(`Collection highlight ${index + 1} name`);
             const descriptionError = fieldError(`Collection highlight ${index + 1} description`);
-            const nameId = `fashion-collection-name-${index}`;
-            const descriptionId = `fashion-collection-description-${index}`;
+            const nameId = `${idPrefix}-collection-name-${index}`;
+            const descriptionId = `${idPrefix}-collection-description-${index}`;
             return (
               <fieldset className="restaurant-editor-dish" key={index}>
                 <legend>Collection highlight {index + 1}</legend>
@@ -63,9 +65,9 @@ export function FashionEditor({ content, onChange }: FashionEditorProps) {
           })}
         </div>
         {validation.errors.some((error) => error === "Keep between two and four collection highlights.") && <p className="restaurant-editor-error" role="alert">Keep between two and four collection highlights. A saved fashion project needs at least two valid collections.</p>}
-        <label className="restaurant-editor-field" htmlFor="fashion-brand-story">Brand story <span>Optional; leave blank to omit this section.</span>
-          <textarea id="fashion-brand-story" rows={3} value={draft.brandStory} onChange={(event) => update({ ...draft, brandStory: event.target.value })} aria-invalid={Boolean(fieldError("Brand story must"))} aria-describedby={fieldError("Brand story must") ? "fashion-brand-story-error" : undefined} />
-          {fieldError("Brand story must") && <span id="fashion-brand-story-error" className="site-settings-error">{fieldError("Brand story must")}</span>}
+        <label className="restaurant-editor-field" htmlFor={`${idPrefix}-brand-story`}>Brand story <span>Optional; leave blank to omit this section.</span>
+          <textarea id={`${idPrefix}-brand-story`} rows={3} value={draft.brandStory} onChange={(event) => update({ ...draft, brandStory: event.target.value })} aria-invalid={Boolean(fieldError("Brand story must"))} aria-describedby={fieldError("Brand story must") ? `${idPrefix}-brand-story-error` : undefined} />
+          {fieldError("Brand story must") && <span id={`${idPrefix}-brand-story-error`} className="site-settings-error">{fieldError("Brand story must")}</span>}
         </label>
         {validation.errors.length > 0 && <p className="restaurant-editor-error" role="status">Correct the highlighted fashion fields before saving or generating another page.</p>}
       </div>

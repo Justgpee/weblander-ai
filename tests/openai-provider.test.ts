@@ -17,7 +17,7 @@ vi.mock("openai", () => ({
 vi.mock("openai/helpers/zod", () => ({ zodTextFormat: vi.fn((_schema: unknown, name: string) => ({ name })) }));
 
 import { GenerationError } from "@/lib/ai/errors";
-import { OPENAI_REQUEST_TIMEOUT_MS, requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection } from "@/lib/ai/openai-provider";
+import { OPENAI_REQUEST_TIMEOUT_MS, requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection, requestGeneratedSitePage } from "@/lib/ai/openai-provider";
 import { OPENAI_IMAGE_MODEL, OPENAI_IMAGE_REQUEST_TIMEOUT_MS, requestGeneratedHeroImage } from "@/lib/ai/openai-image-provider";
 
 const brief = {
@@ -58,6 +58,36 @@ describe("OpenAI provider timeout", () => {
       message: "The generation service is temporarily unavailable. Please try again.",
     } satisfies Partial<GenerationError>);
     expect(mocks.options[0]).toMatchObject({ timeout: OPENAI_REQUEST_TIMEOUT_MS, maxRetries: 0 });
+  });
+
+  it("logs one redacted diagnostic for shared Home and page provider failures", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const providerError = Object.assign(new Error("private provider message and prompt"), {
+      name: "APIError", status: 401, code: "invalid_api_key", request_id: "req_mock_42",
+      headers: { authorization: "Bearer secret" },
+    });
+    mocks.parse.mockRejectedValueOnce(providerError);
+    await expect(requestGeneratedContent(brief)).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenLastCalledWith("AI provider request failed", expect.objectContaining({
+      operation: "home-generation", errorClass: "APIError", category: "provider-http", httpStatus: 401,
+      providerCode: "invalid_api_key", requestId: "req_mock_42",
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private provider message|prompt|Bearer secret|authorization/);
+
+    log.mockClear();
+    mocks.parse.mockRejectedValueOnce(providerError);
+    await expect(requestGeneratedSitePage({
+      brief,
+      pageType: "services",
+      identity: { id: "services", slug: "services", title: "Services" },
+      template: { id: "real-estate", content: { featuredProperties: [
+        { name: "Thoughtful city homes", description: "A property concept grounded in the agency's supplied focus." },
+        { name: "Spaces for new chapters", description: "A second descriptive concept grounded in the supplied focus." },
+      ] } },
+    })).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenLastCalledWith("AI provider request failed", expect.objectContaining({ operation: "page-generation" }));
   });
 
   it("uses the existing structured-output provider path for restaurant content", async () => {
