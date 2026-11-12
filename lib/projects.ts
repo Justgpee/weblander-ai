@@ -15,13 +15,18 @@ import {
   SiteSettingsV2Schema,
   SiteSettingsV9Schema,
   SiteSettingsV10Schema,
+  SiteSettingsV11Schema,
+  SiteSettingsV12Schema,
+  DEFAULT_SITE_BRANDING,
+  siteCtaTargetFromLegacy,
+  siteCtaTargetLegacyProjection,
   validateAppearanceContrast,
   type SiteSettings,
 } from "@/lib/site-settings";
-import { normalizeSiteNavigationTargets, validateSiteNavigationTargets } from "@/lib/site-navigation-options";
+import { normalizeSiteNavigationTargets, siteNavigationDestinationOptions, validateSiteNavigationTargets } from "@/lib/site-navigation-options";
 
 export const PROJECT_STORAGE_KEY = "weblander-ai:projects";
-export const PROJECT_COLLECTION_VERSION = 10;
+export const PROJECT_COLLECTION_VERSION = 12;
 
 export const ProjectIdSchema = z.string().uuid();
 export const ProjectNameSchema = z.string().trim().min(1).max(80);
@@ -84,7 +89,7 @@ function withUniquePages<T extends { pages: Array<{ id: string; slug: string; ki
 const ProjectSnapshotBaseSchema = z.object({
   brief: BusinessBriefSchema,
   layout: ProjectLayoutSchema,
-  siteSettings: SiteSettingsV10Schema,
+  siteSettings: SiteSettingsV12Schema,
   heroImage: HeroImageAssetSchema.nullable(),
   pages: z.array(ProjectPageSchema).min(1).max(20),
 }).strict();
@@ -94,6 +99,16 @@ export const ProjectSnapshotSchema = withUniquePages(ProjectSnapshotBaseSchema).
   if (!validateSiteNavigationTargets(snapshot.siteSettings, snapshot.pages)) context.addIssue({
     code: "custom", path: ["siteSettings", "navigation"], message: "Navigation destinations must reference an existing page and rendered section.",
   });
+  const target = snapshot.siteSettings.ctaTarget;
+  if ((target.type === "page" || target.type === "section") && !snapshot.pages.some((page) => page.id === target.pageId)) context.addIssue({
+    code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference an existing page.",
+  });
+  if (target.type === "section") {
+    const page = snapshot.pages.find((candidate) => candidate.id === target.pageId);
+    if (page && !siteNavigationDestinationOptions(page.template, page.kind).some((option) => option.destination === target.anchor)) context.addIssue({
+      code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference a rendered section.",
+    });
+  }
 });
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 
@@ -128,7 +143,7 @@ export const ProjectRecordV1Schema = withProjectTimeValidation(ProjectRecordFiel
 export const ProjectRecordV2Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsV2Schema });
 export const ProjectRecordV3Schema = withProjectTimeValidation({ ...ProjectRecordFields, siteSettings: SiteSettingsV9Schema });
 const ProjectRecordV4Fields = { ...ProjectRecordFields, siteSettings: SiteSettingsV9Schema, heroImage: HeroImageAssetSchema.nullable() };
-function validateProjectAppearance<T extends { brief: BusinessBrief; siteSettings: SiteSettings }>(schema: z.ZodType<T>) {
+function validateProjectAppearance<T extends { brief: BusinessBrief; siteSettings: { appearance: SiteSettings["appearance"] } }>(schema: z.ZodType<T>) {
   return schema.superRefine((project, context) => {
     const contrast = validateAppearanceContrast(project.brief.style, project.siteSettings.appearance);
     if (!contrast.valid) context.addIssue({ code: "custom", path: ["siteSettings", "appearance"], message: contrast.issues.join(" ") });
@@ -184,7 +199,59 @@ export const ProjectRecordV10Schema = validateProjectAppearance(withUniquePages(
     code: "custom", path: ["siteSettings", "navigation"], message: "Navigation destinations must reference an existing page and rendered section.",
   });
 });
-export const ProjectRecordSchema = ProjectRecordV10Schema;
+export const ProjectRecordV11Schema = validateProjectAppearance(withUniquePages(withProjectTimeValidation({
+  id: ProjectIdSchema,
+  name: ProjectNameSchema,
+  brief: BusinessBriefSchema,
+  layout: ProjectLayoutSchema,
+  siteSettings: SiteSettingsV11Schema,
+  heroImage: HeroImageAssetSchema.nullable(),
+  pages: z.array(ProjectPageSchema).min(1).max(20),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  revision: z.number().int().positive(),
+}))).superRefine((project, context) => {
+  if (!validateSiteNavigationTargets(project.siteSettings, project.pages)) context.addIssue({
+    code: "custom", path: ["siteSettings", "navigation"], message: "Navigation destinations must reference an existing page and rendered section.",
+  });
+  const target = project.siteSettings.ctaTarget;
+  if ((target.type === "page" || target.type === "section") && !project.pages.some((page) => page.id === target.pageId)) context.addIssue({
+    code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference an existing page.",
+  });
+  if (target.type === "section") {
+    const page = project.pages.find((candidate) => candidate.id === target.pageId);
+    if (page && !siteNavigationDestinationOptions(page.template, page.kind).some((option) => option.destination === target.anchor)) context.addIssue({
+      code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference a rendered section.",
+    });
+  }
+});
+export const ProjectRecordV12Schema = validateProjectAppearance(withUniquePages(withProjectTimeValidation({
+  id: ProjectIdSchema,
+  name: ProjectNameSchema,
+  brief: BusinessBriefSchema,
+  layout: ProjectLayoutSchema,
+  siteSettings: SiteSettingsV12Schema,
+  heroImage: HeroImageAssetSchema.nullable(),
+  pages: z.array(ProjectPageSchema).min(1).max(20),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  revision: z.number().int().positive(),
+}))).superRefine((project, context) => {
+  if (!validateSiteNavigationTargets(project.siteSettings, project.pages)) context.addIssue({
+    code: "custom", path: ["siteSettings", "navigation"], message: "Navigation destinations must reference an existing page and rendered section.",
+  });
+  const target = project.siteSettings.ctaTarget;
+  if ((target.type === "page" || target.type === "section") && !project.pages.some((page) => page.id === target.pageId)) context.addIssue({
+    code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference an existing page.",
+  });
+  if (target.type === "section") {
+    const page = project.pages.find((candidate) => candidate.id === target.pageId);
+    if (page && !siteNavigationDestinationOptions(page.template, page.kind).some((option) => option.destination === target.anchor)) context.addIssue({
+      code: "custom", path: ["siteSettings", "ctaTarget"], message: "The CTA destination must reference a rendered section.",
+    });
+  }
+});
+export const ProjectRecordSchema = ProjectRecordV12Schema;
 export type ProjectRecord = z.infer<typeof ProjectRecordSchema>;
 
 export const ProjectCollectionV1Schema = z.object({
@@ -230,10 +297,18 @@ export const ProjectCollectionV9Schema = z.object({
   projects: z.array(ProjectRecordV9Schema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
 export const ProjectCollectionV10Schema = z.object({
-  version: z.literal(PROJECT_COLLECTION_VERSION),
+  version: z.literal(10),
   projects: z.array(ProjectRecordV10Schema),
 }).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
-export const ProjectCollectionSchema = ProjectCollectionV10Schema;
+export const ProjectCollectionV11Schema = z.object({
+  version: z.literal(11),
+  projects: z.array(ProjectRecordV11Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+export const ProjectCollectionV12Schema = z.object({
+  version: z.literal(PROJECT_COLLECTION_VERSION),
+  projects: z.array(ProjectRecordV12Schema),
+}).strict().superRefine((collection, context) => validateUniqueProjectIds(collection.projects, context));
+export const ProjectCollectionSchema = ProjectCollectionV12Schema;
 
 function validateUniqueProjectIds(projects: Array<{ id: string }>, context: z.RefinementCtx) {
   const seenIds = new Set<string>();
@@ -289,7 +364,7 @@ type LegacyProjectRecord = {
   brief: BusinessBrief;
   content: ProjectPageContent;
   layout: "editorial" | "split";
-  siteSettings: SiteSettings;
+  siteSettings: SiteSettings | z.infer<typeof SiteSettingsV9Schema>;
   heroImage: HeroImageAsset | null;
   template?: SiteTemplate;
   createdAt: string;
@@ -300,16 +375,47 @@ type LegacyProjectRecord = {
 function migrateLegacyProject(project: LegacyProjectRecord): ProjectRecord {
   const { content, template, ...site } = project;
   const pages = [{ id: "home", slug: "index", title: "Home", kind: "home" as const, content, template: template ?? DEFAULT_SITE_TEMPLATE }];
+  const settingsForNavigation = { ...site.siteSettings, branding: DEFAULT_SITE_BRANDING } as SiteSettings;
   return ProjectRecordSchema.parse({
     ...site,
-    siteSettings: SiteSettingsV10Schema.parse(normalizeSiteNavigationTargets(site.siteSettings, pages)),
+    siteSettings: SiteSettingsV12Schema.parse({
+      ...normalizeSiteNavigationTargets(settingsForNavigation, pages),
+      ctaTarget: siteCtaTargetFromLegacy(site.siteSettings.ctaDestination),
+      branding: DEFAULT_SITE_BRANDING,
+    }),
     pages,
   });
 }
 
 function migrateV9Project(project: z.infer<typeof ProjectRecordV9Schema>): ProjectRecord {
-  const siteSettings = SiteSettingsV10Schema.parse(normalizeSiteNavigationTargets(project.siteSettings, project.pages));
+  const settingsForNavigation = { ...project.siteSettings, branding: DEFAULT_SITE_BRANDING } as SiteSettings;
+  const siteSettings = SiteSettingsV12Schema.parse({
+    ...normalizeSiteNavigationTargets(settingsForNavigation, project.pages),
+    ctaTarget: siteCtaTargetFromLegacy(project.siteSettings.ctaDestination),
+    branding: DEFAULT_SITE_BRANDING,
+  });
   return ProjectRecordSchema.parse({ ...project, siteSettings });
+}
+
+function migrateV10Project(project: z.infer<typeof ProjectRecordV10Schema>): ProjectRecord {
+  return ProjectRecordSchema.parse({
+    ...project,
+    siteSettings: SiteSettingsV12Schema.parse({
+      ...project.siteSettings,
+      ctaTarget: siteCtaTargetFromLegacy(project.siteSettings.ctaDestination),
+      branding: DEFAULT_SITE_BRANDING,
+    }),
+  });
+}
+
+function migrateV11Project(project: z.infer<typeof ProjectRecordV11Schema>): ProjectRecord {
+  return ProjectRecordSchema.parse({
+    ...project,
+    siteSettings: SiteSettingsV12Schema.parse({
+      ...project.siteSettings,
+      branding: DEFAULT_SITE_BRANDING,
+    }),
+  });
 }
 
 export function createProjectStorage({ storage, now = () => new Date(), createId = () => globalThis.crypto.randomUUID() }: ProjectStorageOptions) {
@@ -330,6 +436,17 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     }
     const current = ProjectCollectionSchema.safeParse(value);
     if (current.success) return current.data;
+    const version11 = ProjectCollectionV11Schema.safeParse(value);
+    if (version11.success) {
+      return ProjectCollectionV12Schema.parse({
+        version: PROJECT_COLLECTION_VERSION,
+        projects: version11.data.projects.map(migrateV11Project),
+      });
+    }
+    const version10 = ProjectCollectionV10Schema.safeParse(value);
+    if (version10.success) {
+      return { version: PROJECT_COLLECTION_VERSION, projects: version10.data.projects.map(migrateV10Project) };
+    }
     const version9 = ProjectCollectionV9Schema.safeParse(value);
     if (version9.success) {
       return { version: PROJECT_COLLECTION_VERSION, projects: version9.data.projects.map(migrateV9Project) };
@@ -442,14 +559,14 @@ export function createProjectStorage({ storage, now = () => new Date(), createId
     return project;
   }
 
-  function create(name: string, snapshot: ProjectSnapshot): ProjectRecord {
+  function create(name: string, snapshot: ProjectSnapshot, requestedId?: string): ProjectRecord {
     const projectName = parseInput(ProjectNameSchema, name);
     const projectSnapshot = parseInput(ProjectSnapshotSchema, snapshot);
     const collection = readCollection();
     const time = timestamp();
     let id: string;
     try {
-      id = parseInput(ProjectIdSchema, createId());
+      id = parseInput(ProjectIdSchema, requestedId ?? createId());
     } catch (error) {
       if (error instanceof ProjectStorageError) throw error;
       throw new ProjectStorageError("FAILED");
@@ -515,7 +632,11 @@ export function projectSnapshotFromPages(
   siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS,
   heroImage: HeroImageAsset | null = null,
 ): ProjectSnapshot {
-  const normalizedSettings = SiteSettingsV10Schema.parse(normalizeSiteNavigationTargets(siteSettings, pages));
+  const normalizedNavigation = normalizeSiteNavigationTargets(siteSettings, pages);
+  const ctaTarget = siteSettings.ctaTarget && siteCtaTargetLegacyProjection(siteSettings.ctaTarget) === siteSettings.ctaDestination
+    ? siteSettings.ctaTarget
+    : siteCtaTargetFromLegacy(siteSettings.ctaDestination);
+  const normalizedSettings = SiteSettingsV12Schema.parse({ ...normalizedNavigation, ctaTarget });
   return ProjectSnapshotSchema.parse({ brief, pages, layout, siteSettings: normalizedSettings, heroImage });
 }
 

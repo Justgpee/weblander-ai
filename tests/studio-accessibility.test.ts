@@ -7,6 +7,7 @@ import { FashionEditor } from "@/components/fashion-editor";
 import { PreviewLayoutControls } from "@/components/website-preview";
 import { RealEstateEditor } from "@/components/real-estate-editor";
 import { RestaurantEditor } from "@/components/restaurant-editor";
+import { LogoBrandingEditor } from "@/components/logo-branding-editor";
 import type { FashionContent, RealEstateContent, RestaurantContent } from "@/lib/site-templates";
 
 function expectUniqueEditorIdsAndAssociations(markup: string) {
@@ -26,6 +27,41 @@ function expectUniqueEditorIdsAndAssociations(markup: string) {
 }
 
 describe("Studio rendered accessibility", () => {
+  it("provides accessible branding controls with loading feedback", () => {
+    const markup = renderToStaticMarkup(createElement(LogoBrandingEditor, {
+      logoUrl: null,
+      logoDisplayMode: "image-with-name",
+      loading: true,
+      error: "",
+      unavailable: false,
+      onUpload: () => {},
+      onRemove: () => {},
+      onDisplayModeChange: () => {},
+    }));
+    expect(markup).toContain('aria-label="Choose a PNG, JPEG, or WebP business logo"');
+    expect(markup).toContain('aria-describedby="site-logo-help site-logo-error"');
+    expect(markup).toContain('disabled="" aria-busy="true">Checking logo…</button>');
+    expect(markup).toContain('id="site-logo-help"');
+    expect(markup).toContain('id="site-logo-error"');
+    expect(markup).toContain('type="radio"');
+  });
+
+  it("offers a non-misleading remove action when a saved logo is unavailable", () => {
+    const markup = renderToStaticMarkup(createElement(LogoBrandingEditor, {
+      logoUrl: null,
+      logoDisplayMode: "image-only",
+      loading: false,
+      error: "The saved logo could not be read. Text branding will be shown instead.",
+      unavailable: true,
+      onUpload: () => {},
+      onRemove: () => {},
+      onDisplayModeChange: () => {},
+    }));
+    expect(markup).not.toContain("logo-upload-preview");
+    expect(markup).toContain("The saved logo is unavailable.");
+    expect(markup).toContain(">Remove logo</button>");
+  });
+
   it("keeps labels and validation messages associated across two Restaurant editors", () => {
     const invalidContent = {
       menuHighlights: [
@@ -34,14 +70,16 @@ describe("Studio rendered accessibility", () => {
       ],
     } as unknown as RestaurantContent;
     const onChange = () => {};
+    const regeneration = { loading: false, error: "" };
     const markup = renderToStaticMarkup(createElement(Fragment, null,
-      createElement(RestaurantEditor, { pageId: "home", content: invalidContent, onChange }),
-      createElement(RestaurantEditor, { pageId: "services", content: invalidContent, onChange }),
+      createElement(RestaurantEditor, { pageId: "home", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
+      createElement(RestaurantEditor, { pageId: "services", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
     ));
 
     expectUniqueEditorIdsAndAssociations(markup);
     expect(markup).toContain('id="home-restaurant-menu-name-0-error"');
     expect(markup).toContain('id="services-restaurant-menu-name-0-error"');
+    expect(markup).toContain('aria-busy="false">Regenerate menu highlights</button>');
   });
 
   it("keeps labels and validation messages associated across two Fashion editors", () => {
@@ -52,14 +90,16 @@ describe("Studio rendered accessibility", () => {
       ],
     } as unknown as FashionContent;
     const onChange = () => {};
+    const regeneration = { loading: false, error: "" };
     const markup = renderToStaticMarkup(createElement(Fragment, null,
-      createElement(FashionEditor, { pageId: "home", content: invalidContent, onChange }),
-      createElement(FashionEditor, { pageId: "products", content: invalidContent, onChange }),
+      createElement(FashionEditor, { pageId: "home", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
+      createElement(FashionEditor, { pageId: "products", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
     ));
 
     expectUniqueEditorIdsAndAssociations(markup);
     expect(markup).toContain('id="home-fashion-collection-name-0-error"');
     expect(markup).toContain('id="products-fashion-collection-name-0-error"');
+    expect(markup).toContain('aria-busy="false">Regenerate collection highlights</button>');
   });
 
   it("keeps labels and validation messages associated across two Real Estate editors", () => {
@@ -70,14 +110,25 @@ describe("Studio rendered accessibility", () => {
       ],
     } as unknown as RealEstateContent;
     const onChange = () => {};
+    const regeneration = { loading: false, error: "" };
     const markup = renderToStaticMarkup(createElement(Fragment, null,
-      createElement(RealEstateEditor, { pageId: "home", content: invalidContent, onChange }),
-      createElement(RealEstateEditor, { pageId: "services", content: invalidContent, onChange }),
+      createElement(RealEstateEditor, { pageId: "home", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
+      createElement(RealEstateEditor, { pageId: "services", content: invalidContent, onChange, regeneration, onRegenerate: () => {} }),
     ));
 
     expectUniqueEditorIdsAndAssociations(markup);
     expect(markup).toContain('id="home-real-estate-property-name-0-error"');
     expect(markup).toContain('id="services-real-estate-property-name-0-error"');
+    expect(markup).toContain('aria-busy="false">Regenerate featured properties</button>');
+  });
+
+  it("announces and disables template regeneration while its section is loading", () => {
+    const markup = renderToStaticMarkup(createElement(RestaurantEditor, {
+      pageId: "home",
+      content: { menuHighlights: [{ name: "Garden bowl", description: "A bright bowl with seasonal ingredients." }, { name: "Roasted vegetables", description: "A colorful mix served with herbs." }] },
+      onChange: () => {}, onRegenerate: () => {}, regeneration: { loading: true, error: "" },
+    }));
+    expect(markup).toContain('disabled="" aria-busy="true">Regenerating menu highlights…</button>');
   });
 
   it("names the preview layout controls and exposes the selected layout", () => {

@@ -1,5 +1,6 @@
 import { GeneratedPageSchema, SectionContentSchemas, type BusinessBrief, type EditableSection, type GeneratedPage } from "@/lib/generation";
 import { GenerationError } from "@/lib/ai/errors";
+import type { ProviderDiagnosticContext } from "@/lib/ai/provider-diagnostics";
 import { requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection } from "@/lib/ai/openai-provider";
 import {
   FashionContentSchema,
@@ -17,7 +18,7 @@ import {
 } from "@/lib/site-templates";
 
 export type ContentProvider = (brief: BusinessBrief) => Promise<unknown>;
-export type SectionContentProvider = (brief: BusinessBrief, section: EditableSection) => Promise<unknown>;
+export type SectionContentProvider = (brief: BusinessBrief, section: EditableSection, diagnosticContext?: ProviderDiagnosticContext) => Promise<unknown>;
 export type RestaurantContentProvider = (brief: BusinessBrief) => Promise<unknown>;
 export type FashionContentProvider = (brief: BusinessBrief) => Promise<unknown>;
 export type RealEstateContentProvider = (brief: BusinessBrief) => Promise<unknown>;
@@ -44,10 +45,11 @@ export async function regeneratePageSection(
   brief: BusinessBrief,
   section: EditableSection,
   provider: SectionContentProvider = requestGeneratedSection,
+  diagnosticContext?: ProviderDiagnosticContext,
 ) {
   let content: unknown;
   try {
-    content = await provider(brief, section);
+    content = await provider(brief, section, diagnosticContext);
   } catch (error) {
     if (error instanceof GenerationError) throw error;
     throw new GenerationError("PROVIDER", "The generation service is temporarily unavailable. Please try again.");

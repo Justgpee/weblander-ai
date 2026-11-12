@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SiteLogoAssetIdSchema } from "@/lib/site-logo";
 import { VisualStyleSchema, type VisualStyle } from "@/lib/generation";
 
 export const SAFE_SITE_ANCHORS = ["#top", "#site-headline", "#site-about", "#site-contact", "#site-story", "#site-menu", "#site-visit", "#site-collections", "#site-brand-story", "#site-properties", "#site-agency-story", "#site-services", "#site-products"] as const;
@@ -179,6 +180,41 @@ export const SiteNavigationTargetSchema = z.discriminatedUnion("type", [
 ]);
 export type SiteNavigationTarget = z.infer<typeof SiteNavigationTargetSchema>;
 
+export const SiteCtaTargetSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("none") }).strict(),
+  z.object({ type: z.literal("external"), url: SafeExternalNavigationUrlSchema }).strict(),
+  z.object({ type: z.literal("current-section"), anchor: z.enum(SAFE_SITE_ANCHORS) }).strict(),
+  z.object({ type: z.literal("page"), pageId: NavigationPageIdSchema }).strict(),
+  z.object({ type: z.literal("section"), pageId: NavigationPageIdSchema, anchor: z.enum(SAFE_SITE_ANCHORS) }).strict(),
+]);
+export type SiteCtaTarget = z.infer<typeof SiteCtaTargetSchema>;
+
+export const SiteLogoDisplayModeSchema = z.enum(["image-only", "image-with-name"]);
+export type SiteLogoDisplayMode = z.infer<typeof SiteLogoDisplayModeSchema>;
+export const SiteBrandingSchema = z.object({
+  logoAssetId: SiteLogoAssetIdSchema.nullable(),
+  logoDisplayMode: SiteLogoDisplayModeSchema,
+}).strict();
+export type SiteBranding = z.infer<typeof SiteBrandingSchema>;
+export const DEFAULT_SITE_BRANDING: SiteBranding = { logoAssetId: null, logoDisplayMode: "image-with-name" };
+
+export function siteCtaTargetFromLegacy(destination: string): SiteCtaTarget {
+  const parsed = SiteDestinationSchema.parse(destination);
+  if (!parsed) return { type: "none" };
+  if (parsed.startsWith("http://") || parsed.startsWith("https://")) return { type: "external", url: new URL(parsed).href };
+  return { type: "current-section", anchor: z.enum(SAFE_SITE_ANCHORS).parse(parsed) };
+}
+
+export function siteCtaTargetLegacyProjection(target: SiteCtaTarget): string {
+  switch (target.type) {
+    case "none":
+    case "page":
+    case "section": return "";
+    case "external": return new URL(target.url).href;
+    case "current-section": return target.anchor;
+  }
+}
+
 export const SiteNavigationEntrySchema = z.object({
   label: z.string().trim().min(1).max(40),
   destination: SiteDestinationSchema,
@@ -232,6 +268,20 @@ export const SiteSettingsV10Schema = z.object({
 });
 export type SiteSettingsV10 = z.infer<typeof SiteSettingsV10Schema>;
 
+/** Collection v11 adds an explicit, validated CTA destination discriminator. */
+export const SiteSettingsV11Schema = SiteSettingsV10Schema.extend({
+  ctaTarget: SiteCtaTargetSchema,
+}).superRefine((settings, context) => {
+  if (settings.ctaDestination !== siteCtaTargetLegacyProjection(settings.ctaTarget)) {
+    context.addIssue({ code: "custom", path: ["ctaTarget"], message: "The compatibility destination must match its typed target." });
+  }
+});
+
+/** Collection v12 adds a local asset reference and a validated logo display mode. */
+export const SiteSettingsV12Schema = SiteSettingsV11Schema.extend({
+  branding: SiteBrandingSchema,
+});
+
 export const SiteSettingsSchema = z.object({
   navigation: z.tuple([
     SiteNavigationEntrySchema,
@@ -239,7 +289,9 @@ export const SiteSettingsSchema = z.object({
     SiteNavigationEntrySchema,
   ]),
   ctaDestination: SiteDestinationSchema,
+  ctaTarget: SiteCtaTargetSchema.optional(),
   appearance: AppearanceSchema,
+  branding: SiteBrandingSchema.default(DEFAULT_SITE_BRANDING),
 }).strict();
 
 /** Strict shape of collection-v2 site settings, retained for migration only. */
@@ -262,4 +314,5 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   ],
   ctaDestination: "",
   appearance: DEFAULT_APPEARANCE,
+  branding: DEFAULT_SITE_BRANDING,
 };

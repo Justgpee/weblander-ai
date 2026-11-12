@@ -8,9 +8,11 @@ type RestaurantEditorProps = {
   pageId: string;
   content: RestaurantContent;
   onChange: (content: RestaurantContent | null) => void;
+  regeneration: { loading: boolean; error: string; disabled?: boolean };
+  onRegenerate: () => void;
 };
 
-export function RestaurantEditor({ pageId, content, onChange }: RestaurantEditorProps) {
+export function RestaurantEditor({ pageId, content, onChange, regeneration, onRegenerate }: RestaurantEditorProps) {
   const [draft, setDraft] = useState<RestaurantContentDraft>(() => restaurantContentToDraft(content));
   const validation = validateRestaurantContentDraft(draft);
   const idPrefix = `${pageId}-restaurant`;
@@ -41,7 +43,9 @@ export function RestaurantEditor({ pageId, content, onChange }: RestaurantEditor
         <div className="restaurant-editor-heading">
           <div><strong>Menu highlights</strong><span>Use two to four dishes. Do not add prices or claims that were not supplied.</span></div>
           <button type="button" onClick={() => update({ ...draft, menuHighlights: [...draft.menuHighlights, { name: "", description: "" }] })} disabled={draft.menuHighlights.length >= 4}>Add highlight</button>
+          <button type="button" onClick={onRegenerate} disabled={regeneration.loading || regeneration.disabled} aria-busy={regeneration.loading}>{regeneration.loading ? "Regenerating menu highlights…" : "Regenerate menu highlights"}</button>
         </div>
+        {regeneration.error && <p role="alert" className="restaurant-editor-error">{regeneration.error}</p>}
         <div className="restaurant-editor-menu">
           {draft.menuHighlights.map((highlight, index) => {
             const nameError = fieldError(`Menu highlight ${index + 1} name`);

@@ -1,5 +1,5 @@
 import type { SiteTemplate } from "@/lib/site-templates";
-import { SiteDestinationSchema, SiteNavigationTargetSchema, type SiteNavigationTarget, type SiteSettings } from "@/lib/site-settings";
+import { SiteDestinationSchema, SiteNavigationTargetSchema, SiteCtaTargetSchema, type SiteCtaTarget, type SiteNavigationTarget, type SiteSettings } from "@/lib/site-settings";
 import { sitePageKindLabel, type SitePageKind } from "@/lib/site-page-kind";
 
 export type SiteNavigationDestinationOption = {
@@ -47,6 +47,21 @@ export function siteNavigationTargetOptions(pages: readonly SiteNavigationPageOp
     }
   }
   return options;
+}
+
+export function siteCtaTargetOptions(pages: readonly SiteNavigationPageOptionSource[], currentPageId: string): Array<{ value: string; label: string; target: SiteCtaTarget }> {
+  const current = pages.find((page) => page.id === currentPageId);
+  const options: Array<{ value: string; label: string; target: SiteCtaTarget }> = [
+    { value: "cta:none", label: "No destination", target: { type: "none" } },
+  ];
+  if (current) for (const section of siteNavigationDestinationOptions(current.template, current.kind)) {
+    options.push({ value: `cta:current:${section.destination}`, label: `This page — ${section.label}`, target: { type: "current-section", anchor: section.destination as Extract<SiteCtaTarget, { type: "current-section" }>['anchor'] } });
+  }
+  for (const option of siteNavigationTargetOptions(pages)) {
+    if (option.target.type === "page") options.push({ value: `cta:page:${option.target.pageId}`, label: option.label, target: { type: "page", pageId: option.target.pageId } });
+    if (option.target.type === "section") options.push({ value: `cta:section:${option.target.pageId}:${option.target.anchor}`, label: option.label, target: { type: "section", pageId: option.target.pageId, anchor: option.target.anchor } });
+  }
+  return options.map((option) => ({ ...option, target: SiteCtaTargetSchema.parse(option.target) }));
 }
 
 export function siteNavigationTargetOptionValue(target: SiteNavigationTarget) {
@@ -185,6 +200,6 @@ export function normalizeSiteNavigationTargets(settings: SiteSettings, pages: re
 }
 
 /** Validate page references and section anchors against the actual project. */
-export function validateSiteNavigationTargets(settings: SiteSettings & { navigation: readonly { target?: SiteNavigationTarget }[] }, pages: readonly { id: string; template: SiteTemplate }[]) {
+export function validateSiteNavigationTargets(settings: { navigation: readonly { destination: string; target?: SiteNavigationTarget }[] }, pages: readonly { id: string; template: SiteTemplate }[]) {
   return settings.navigation.every((entry) => resolveSiteNavigationTarget(entry, pages) !== undefined);
 }

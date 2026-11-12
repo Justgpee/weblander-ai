@@ -2,13 +2,17 @@ import { useState } from "react";
 import type { EditableSection, GeneratedPage } from "@/lib/generation";
 import { GeneratedWebsite } from "@/components/generated-website";
 import type { SiteSettings } from "@/lib/site-settings";
-import { SiteDestinationSchema, SiteNavigationEntrySchema, SiteNavigationTargetSchema, type SiteNavigationTarget } from "@/lib/site-settings";
+import { SiteDestinationSchema, SiteNavigationEntrySchema, SiteNavigationTargetSchema, SiteCtaTargetSchema, siteCtaTargetFromLegacy, type SiteCtaTarget, type SiteNavigationTarget } from "@/lib/site-settings";
 import { AppearanceEditor } from "@/components/appearance-editor";
 import type { Appearance } from "@/lib/site-settings";
 import type { VisualStyle } from "@/lib/generation";
 import type { HeroImageAsset } from "@/lib/site-image";
+import type { SiteLogoAsset } from "@/lib/site-logo";
+import type { SiteLogoDisplayMode } from "@/lib/site-settings";
+import { LogoBrandingEditor } from "@/components/logo-branding-editor";
 import type { ProjectPage } from "@/lib/projects";
 import type { SiteNavigationPageReference } from "@/lib/site-navigation-options";
+import type { TemplateRegenerationSection } from "@/lib/page-section-generation";
 import { ProjectPageContentSchema } from "@/lib/projects";
 import { RestaurantEditor } from "@/components/restaurant-editor";
 import { FashionEditor } from "@/components/fashion-editor";
@@ -19,6 +23,7 @@ import { realEstateEditorInstanceKey } from "@/lib/real-estate-editor-state";
 import {
   CUSTOM_SITE_DESTINATION,
   safeExternalNavigationTarget,
+  siteCtaTargetOptions,
   siteNavigationTargetFromLegacy,
   siteNavigationTargetOptionValue,
   siteNavigationTargetOptions,
@@ -34,6 +39,7 @@ type WebsitePreviewProps = {
   onSiteSettingChange: (index: number, field: "label", value: string) => void;
   onSiteNavigationTargetChange: (index: number, target: SiteNavigationTarget) => void;
   onCtaDestinationChange: (value: string) => void;
+  onCtaTargetChange: (target: SiteCtaTarget) => void;
   onPreviewNavigate: (pageId: string, anchor?: string) => void;
   layout: GeneratedPage["layout"];
   loading: boolean;
@@ -41,6 +47,8 @@ type WebsitePreviewProps = {
   sectionState: Record<EditableSection, { loading: boolean; error: string }>;
   onEdit: (section: EditableSection, value: string, featureIndex?: number) => void;
   onRegenerate: (section: EditableSection) => void;
+  templateSectionState: Record<TemplateRegenerationSection, { loading: boolean; error: string; disabled?: boolean }>;
+  onRegenerateTemplateSection: (section: TemplateRegenerationSection) => void;
   style: VisualStyle;
   appearance: Appearance;
   onAppearanceChange: (appearance: Appearance) => void;
@@ -48,6 +56,11 @@ type WebsitePreviewProps = {
   heroImageState: { loading: boolean; error: string };
   onGenerateHeroImage: () => void;
   onRemoveHeroImage: () => void;
+  logoAsset: SiteLogoAsset | null;
+  logoUploadState: { loading: boolean; error: string };
+  onLogoUpload: (file: File) => void;
+  onLogoRemove: () => void;
+  onLogoDisplayModeChange: (mode: SiteLogoDisplayMode) => void;
   template: SiteTemplate;
   activeProjectId: string | null;
   restaurantEditorRevision: number;
@@ -57,11 +70,15 @@ type WebsitePreviewProps = {
   onRealEstateContentChange: (pageId: string, content: RealEstateContent | null) => void;
 };
 
-export function WebsitePreview({ page, pageEditable, pages, selectedPageId, allowSectionRegeneration, layout, siteSettings, onSiteSettingChange, onSiteNavigationTargetChange, onCtaDestinationChange, onPreviewNavigate, loading, onLayoutChange, sectionState, onEdit, onRegenerate, style, appearance, onAppearanceChange, heroImage, heroImageState, onGenerateHeroImage, onRemoveHeroImage, template, activeProjectId, restaurantEditorRevision, pageEditorRevisions, onRestaurantContentChange, onFashionContentChange, onRealEstateContentChange }: WebsitePreviewProps) {
+export function WebsitePreview({ page, pageEditable, pages, selectedPageId, allowSectionRegeneration, layout, siteSettings, onSiteSettingChange, onSiteNavigationTargetChange, onCtaDestinationChange, onCtaTargetChange, onPreviewNavigate, loading, onLayoutChange, sectionState, onEdit, onRegenerate, templateSectionState, onRegenerateTemplateSection, style, appearance, onAppearanceChange, heroImage, heroImageState, onGenerateHeroImage, onRemoveHeroImage, logoAsset, logoUploadState, onLogoUpload, onLogoRemove, onLogoDisplayModeChange, template, activeProjectId, restaurantEditorRevision, pageEditorRevisions, onRestaurantContentChange, onFashionContentChange, onRealEstateContentChange }: WebsitePreviewProps) {
   const contentValidation = page ? ProjectPageContentSchema.safeParse({ headline: page.headline, description: page.subheadline, features: page.features, callToAction: page.callToAction }) : null;
   const contentIssue = (field: "headline" | "description" | "features" | "callToAction", featureIndex?: number) => contentValidation && !contentValidation.success
     ? contentValidation.error.issues.find((issue) => issue.path[0] === field && (featureIndex === undefined || issue.path[1] === featureIndex))?.message
     : undefined;
+  const ctaOptions = siteCtaTargetOptions(pages, selectedPageId);
+  const ctaTargetResult = SiteCtaTargetSchema.safeParse(siteSettings.ctaTarget);
+  const ctaTarget = ctaTargetResult.success ? ctaTargetResult.data : siteCtaTargetFromLegacy(siteSettings.ctaDestination);
+  const selectedCtaOption = ctaOptions.find((option) => JSON.stringify(option.target) === JSON.stringify(ctaTarget))?.value ?? (ctaTarget?.type === "external" ? "cta:external" : "cta:custom");
   return (
     <section className="preview-column" aria-label="Website preview">
       <div className="preview-header"><div><div className="section-kicker">THE FIRST LOOK</div><h2>Your live preview</h2></div><PreviewLayoutControls layout={layout} onLayoutChange={onLayoutChange} /></div>
@@ -82,12 +99,12 @@ export function WebsitePreview({ page, pageEditable, pages, selectedPageId, allo
         </div>
       </details>}
       {pageEditable && pages.map((record) => <div key={`${activeProjectId ?? "draft"}:${record.id}:${restaurantEditorRevision}`} hidden={record.id !== selectedPageId}>
-        {record.template.id === "restaurant" && <RestaurantEditor key={`${record.id}:${pageEditorRevisions[record.id] ?? 0}`} pageId={record.id} content={record.template.content} onChange={(content) => onRestaurantContentChange(record.id, content)} />}
-        {record.template.id === "fashion" && <FashionEditor key={fashionEditorInstanceKey(activeProjectId, `${record.id}:${record.template.id}`, (pageEditorRevisions[record.id] ?? 0) + restaurantEditorRevision)} pageId={record.id} content={record.template.content} onChange={(content) => onFashionContentChange(record.id, content)} />}
-        {record.template.id === "real-estate" && <RealEstateEditor key={realEstateEditorInstanceKey(activeProjectId, `${record.id}:${record.template.id}`, (pageEditorRevisions[record.id] ?? 0) + restaurantEditorRevision)} pageId={record.id} content={record.template.content} onChange={(content) => onRealEstateContentChange(record.id, content)} />}
+        {record.template.id === "restaurant" && <RestaurantEditor key={`${record.id}:${pageEditorRevisions[record.id] ?? 0}`} pageId={record.id} content={record.template.content} onChange={(content) => onRestaurantContentChange(record.id, content)} regeneration={templateSectionState.menuHighlights} onRegenerate={() => onRegenerateTemplateSection("menuHighlights")} />}
+        {record.template.id === "fashion" && <FashionEditor key={fashionEditorInstanceKey(activeProjectId, `${record.id}:${record.template.id}`, (pageEditorRevisions[record.id] ?? 0) + restaurantEditorRevision)} pageId={record.id} content={record.template.content} onChange={(content) => onFashionContentChange(record.id, content)} regeneration={templateSectionState.collectionHighlights} onRegenerate={() => onRegenerateTemplateSection("collectionHighlights")} />}
+        {record.template.id === "real-estate" && <RealEstateEditor key={realEstateEditorInstanceKey(activeProjectId, `${record.id}:${record.template.id}`, (pageEditorRevisions[record.id] ?? 0) + restaurantEditorRevision)} pageId={record.id} content={record.template.content} onChange={(content) => onRealEstateContentChange(record.id, content)} regeneration={templateSectionState.featuredProperties} onRegenerate={() => onRegenerateTemplateSection("featuredProperties")} />}
       </div>)}
       <details className="copy-editor site-settings-editor" open>
-        <summary>Edit navigation and links <span>Changes appear immediately</span></summary>
+        <summary>Edit branding, navigation, and links <span>Changes appear immediately</span></summary>
         <div className="copy-editor-grid">
           {siteSettings.navigation.map((entry, index) => <NavigationSettingEditor
             key={`${activeProjectId ?? "draft"}:${template.id}:${index}`}
@@ -98,11 +115,30 @@ export function WebsitePreview({ page, pageEditable, pages, selectedPageId, allo
             onTargetChange={onSiteNavigationTargetChange}
           />)}
           <div className="copy-editor-field">
-            <label className="copy-editor-label" htmlFor="site-cta-destination">Call-to-action destination</label>
-            <input id="site-cta-destination" maxLength={2048} value={siteSettings.ctaDestination} onChange={(event) => onCtaDestinationChange(event.target.value)} placeholder="https://example.com or #site-headline" aria-invalid={!SiteDestinationSchema.safeParse(siteSettings.ctaDestination).success} aria-describedby="site-cta-destination-help" />
+            <label className="copy-editor-label" htmlFor="site-cta-target">Call-to-action destination</label>
+            <select id="site-cta-target" value={selectedCtaOption} onChange={(event) => {
+              if (event.target.value === "cta:external") return;
+              const option = ctaOptions.find((candidate) => candidate.value === event.target.value);
+              if (option) onCtaTargetChange(option.target);
+            }} aria-label="Choose a page or section destination for the call-to-action">
+              {ctaOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              <option value="cta:external">External HTTP(S) URL</option>
+              {selectedCtaOption === "cta:custom" && <option value="cta:custom">Legacy destination</option>}
+            </select>
+            <input id="site-cta-destination" maxLength={2048} value={siteSettings.ctaDestination} onChange={(event) => onCtaDestinationChange(event.target.value)} placeholder="External URL or legacy anchor" aria-label="External URL or legacy call-to-action destination" aria-invalid={!SiteDestinationSchema.safeParse(siteSettings.ctaDestination).success} aria-describedby="site-cta-destination-help" />
             <span className="site-settings-help" id="site-cta-destination-help">{SiteDestinationSchema.safeParse(siteSettings.ctaDestination).success ? "Leave blank to show the call-to-action as text." : "Enter a safe http(s) URL, supported section anchor, or leave blank."}</span>
             {!SiteDestinationSchema.safeParse(siteSettings.ctaDestination).success && <span className="site-settings-error" role="status">Enter a safe http(s) URL, supported section anchor, or leave blank.</span>}
           </div>
+          <LogoBrandingEditor
+            logoUrl={logoAsset?.dataUrl ?? null}
+            logoDisplayMode={siteSettings.branding.logoDisplayMode}
+            loading={logoUploadState.loading}
+            error={logoUploadState.error}
+            unavailable={Boolean(siteSettings.branding.logoAssetId && !logoAsset && logoUploadState.error)}
+            onUpload={onLogoUpload}
+            onRemove={onLogoRemove}
+            onDisplayModeChange={onLogoDisplayModeChange}
+          />
         </div>
       </details>
       <AppearanceEditor key={activeProjectId ?? "draft"} style={style} appearance={appearance} onChange={onAppearanceChange} />
@@ -117,7 +153,7 @@ export function WebsitePreview({ page, pageEditable, pages, selectedPageId, allo
       </div>
       <div className={`browser-frame ${loading ? "is-loading" : ""}`}>
         <div className="browser-bar"><div className="browser-dots"><i/><i/><i/></div><div className="address-bar"><span>⌑</span> yourbrand.com</div><span className="browser-more">···</span></div>
-      {loading ? <div className="preview-loading"><div className="loading-orbit">✦</div><strong>Bringing your idea to life</strong><span>Putting the finishing touches on your page…</span><div className="loading-track"><i /></div></div> : page ? <GeneratedPreview page={page} siteSettings={siteSettings} heroImage={heroImage} template={template} pageId={selectedPageId} pages={pages} onNavigate={onPreviewNavigate} /> : <EmptyPreview />}
+      {loading ? <div className="preview-loading"><div className="loading-orbit">✦</div><strong>Bringing your idea to life</strong><span>Putting the finishing touches on your page…</span><div className="loading-track"><i /></div></div> : page ? <GeneratedPreview page={page} siteSettings={siteSettings} heroImage={heroImage} logoAsset={logoAsset} template={template} pageId={selectedPageId} pages={pages} onNavigate={onPreviewNavigate} /> : <EmptyPreview />}
       </div>
       <div className="preview-caption"><span><i/> {page ? "PREVIEW UPDATED" : "PREVIEW AREA"}</span><span>{page ? page.style.toUpperCase() + " DIRECTION" : "YOUR SITE WILL APPEAR HERE"}</span></div>
     </section>
@@ -203,7 +239,8 @@ function NavigationSettingEditor({ entry, index, pages, onChange, onTargetChange
 }
 
 function SectionActions({ section, state, onRegenerate }: { section: EditableSection; state: { loading: boolean; error: string }; onRegenerate: (section: EditableSection) => void }) {
-  return <div className="section-actions"><button type="button" onClick={() => onRegenerate(section)} disabled={state.loading} aria-busy={state.loading}>{state.loading ? "Regenerating…" : "Regenerate section"}</button>{state.error && <span role="alert">{state.error}</span>}<span aria-live="polite" className="sr-only">{state.loading ? "Regenerating section" : ""}</span></div>;
+  const label = section === "callToAction" ? "call-to-action" : section;
+  return <div className="section-actions"><button type="button" onClick={() => onRegenerate(section)} disabled={state.loading} aria-busy={state.loading} aria-label={state.loading ? `Regenerating ${label}` : `Regenerate ${label}`}>{state.loading ? "Regenerating…" : "Regenerate section"}</button>{state.error && <span role="alert">{state.error}</span>}<span aria-live="polite" className="sr-only">{state.loading ? `Regenerating ${label}` : ""}</span></div>;
 }
 
 function EditorField({ label, section, value, maxLength, multiline = false, state, validationMessage, onChange, onRegenerate, allowRegeneration }: { label: string; section: EditableSection; value: string; maxLength: number; multiline?: boolean; state: { loading: boolean; error: string }; validationMessage?: string; onChange: (value: string) => void; onRegenerate: (section: EditableSection) => void; allowRegeneration: boolean }) {
@@ -215,8 +252,8 @@ function EmptyPreview() {
   return <div className="empty-preview"><div className="empty-art"><div className="art-sun"/><div className="art-hill hill-back"/><div className="art-hill hill-front"/><div className="art-card"><span/><span/><span/></div></div><div className="empty-copy"><span className="preview-kicker">A FRESH CANVAS</span><h3>Your next great<br/>first impression.</h3><p>Fill in your business brief and we’ll bring a landing page concept to life.</p></div><div className="empty-footer"><span>Thoughtfully made for you</span><span>✦</span></div></div>;
 }
 
-function GeneratedPreview({ page, siteSettings, heroImage, template, pageId, pages, onNavigate }: { page: GeneratedPage; siteSettings: SiteSettings; heroImage: HeroImageAsset | null; template: SiteTemplate; pageId: string; pages: readonly ProjectPage[]; onNavigate: (pageId: string, anchor?: string) => void }) {
+function GeneratedPreview({ page, siteSettings, heroImage, logoAsset, template, pageId, pages, onNavigate }: { page: GeneratedPage; siteSettings: SiteSettings; heroImage: HeroImageAsset | null; logoAsset: SiteLogoAsset | null; template: SiteTemplate; pageId: string; pages: readonly ProjectPage[]; onNavigate: (pageId: string, anchor?: string) => void }) {
   const selectedRecord = pages.find((record) => record.id === pageId);
   const navigationPages: readonly SiteNavigationPageReference[] = pages.length ? pages : [{ id: pageId, template, kind: "home" }];
-  return <GeneratedWebsite page={page} siteSettings={siteSettings} heroImage={heroImage} template={template} pageKind={selectedRecord?.kind ?? "home"} currentPageId={pageId} pages={navigationPages} onNavigate={onNavigate} />;
+  return <GeneratedWebsite page={page} siteSettings={siteSettings} heroImage={heroImage} logoAsset={logoAsset} template={template} pageKind={selectedRecord?.kind ?? "home"} currentPageId={pageId} pages={navigationPages} onNavigate={onNavigate} />;
 }

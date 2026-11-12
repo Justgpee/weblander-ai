@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { GeneratedPageSchema, VisualStyleSchema, type GeneratedPage } from "@/lib/generation";
-import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, validateAppearanceContrast, validateSiteDestination, type SiteSettings } from "@/lib/site-settings";
+import { DEFAULT_SITE_SETTINGS, SiteSettingsSchema, SiteCtaTargetSchema, siteCtaTargetFromLegacy, validateAppearanceContrast, validateSiteDestination, type SiteCtaTarget, type SiteSettings } from "@/lib/site-settings";
 import { siteStyleTokensCss } from "@/lib/site-style-system";
 import { HeroImageAssetSchema, heroImageDataUrl, type HeroImageAsset } from "@/lib/site-image";
+import { isValidSiteLogoAsset, SiteLogoAssetIdSchema, type SiteLogoAsset } from "@/lib/site-logo";
 import { DEFAULT_SITE_TEMPLATE, SiteTemplateSchema, type FashionContent, type RealEstateContent, type RestaurantContent, type SiteTemplate } from "@/lib/site-templates";
 import { resolveSiteNavigationTarget, siteNavigationDestinationOptions, type SiteNavigationPageReference } from "@/lib/site-navigation-options";
 import type { SitePageKind } from "@/lib/site-page-kind";
+import { ProjectSnapshotSchema, type ProjectSnapshot, type ProjectPage } from "@/lib/projects";
 
 /** Site-only styles shared by the live preview and the standalone document. */
 export const GENERATED_SITE_CSS = `
@@ -13,7 +15,7 @@ export const GENERATED_SITE_CSS = `
 body{margin:0}
 .site-mock{--site-bg:#f1f0e9;--site-ink:#283026;--site-accent:#63745a;--site-serif:Georgia,'Times New Roman',serif;box-sizing:border-box;container:site / inline-size;width:100%;min-width:0;position:relative;min-height:100vh;padding:0 clamp(16px,5%,88px) 24px;background:var(--site-bg);color:var(--site-ink);font-family:Arial,Helvetica,sans-serif}
 .site-mock *{box-sizing:border-box;min-width:0}.site-mock.luxury{--site-bg:#eee8dd;--site-ink:#332b22;--site-accent:#9a7951;--site-serif:Georgia,'Times New Roman',serif}.site-mock.bold{--site-bg:#f1e5dc;--site-ink:#362921;--site-accent:#bd6346;--site-serif:Arial,Helvetica,sans-serif}.site-mock.playful{--site-bg:#f4eaf0;--site-ink:#392b36;--site-accent:#a16c91;--site-serif:Georgia,'Times New Roman',serif}.site-mock.professional{--site-bg:#eaf0f2;--site-ink:#24333c;--site-accent:#4e7786;--site-serif:Arial,Helvetica,sans-serif}
-.site-nav{min-height:76px;border-bottom:1px solid color-mix(in srgb,var(--site-ink) 16%,transparent);display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 0;font-size:14px}.site-logo{flex:0 1 auto;max-width:100%;font-family:var(--site-serif);font-size:20px;font-weight:600;overflow-wrap:anywhere}.site-nav-links{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:clamp(12px,2.2cqi,30px);color:color-mix(in srgb,var(--site-ink) 76%,transparent);font-size:13px}.site-nav-links a,.site-nav-links span,.site-nav-links button{min-width:0;max-width:100%;overflow-wrap:anywhere}.site-nav-button{appearance:none;border:0;padding:0;background:transparent;color:inherit;font:inherit;text-align:inherit;text-decoration:none;cursor:pointer}.site-nav-action{border:1px solid var(--site-ink);padding:10px 16px;font-size:13px;text-decoration:none;color:var(--site-ink)}
+.site-nav{min-height:76px;border-bottom:1px solid color-mix(in srgb,var(--site-ink) 16%,transparent);display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 0;font-size:14px}.site-logo{flex:0 1 auto;max-width:100%;font-family:var(--site-serif);font-size:20px;font-weight:600;overflow-wrap:anywhere}.site-logo.has-custom-logo{display:inline-flex;align-items:center;gap:10px}.site-logo-image{display:block;width:auto;height:40px;max-width:150px;object-fit:contain}.site-logo-name{min-width:0;overflow-wrap:anywhere}a.site-logo{color:inherit;text-decoration:none}.site-logo:focus-visible{outline:3px solid var(--site-ink);outline-offset:4px}.site-nav-links{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:clamp(12px,2.2cqi,30px);color:color-mix(in srgb,var(--site-ink) 76%,transparent);font-size:13px}.site-nav-links a,.site-nav-links span,.site-nav-links button{min-width:0;max-width:100%;overflow-wrap:anywhere}.site-nav-button{appearance:none;border:0;padding:0;background:transparent;color:inherit;font:inherit;text-align:inherit;text-decoration:none;cursor:pointer}.site-nav-action{border:1px solid var(--site-ink);padding:10px 16px;font-size:13px;text-decoration:none;color:var(--site-ink)}
 .site-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.92fr);gap:clamp(20px,5cqi,72px);align-items:center;min-height:min(700px,78vh);padding:clamp(42px,8cqi,96px) 0}.site-copy{min-width:0;position:relative;z-index:1}.site-kicker{font-size:11px;letter-spacing:1.5px;color:var(--site-ink);font-weight:700}.site-kicker i{font-style:normal;margin-left:5px}.site-copy h1{font-family:var(--site-serif);font-size:clamp(38px,6cqi,76px);font-weight:400;letter-spacing:-.045em;line-height:1.03;margin:18px 0 20px;max-width:16ch;overflow-wrap:anywhere}.site-mock.bold .site-copy h1,.site-mock.professional .site-copy h1{font-weight:700;letter-spacing:-.055em}.site-copy>p{color:color-mix(in srgb,var(--site-ink) 78%,transparent);font-size:clamp(15px,1.5cqi,18px);line-height:1.7;max-width:58ch;margin:0;overflow-wrap:anywhere}.site-actions{min-width:0;margin-top:28px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}.site-cta{display:inline-flex;align-items:center;justify-content:center;max-width:100%;gap:10px;background:var(--site-ink);color:var(--site-bg);border:2px solid var(--site-accent);border-radius:2px;padding:13px 19px;font:600 15px/1.2 Arial,Helvetica,sans-serif;text-decoration:none;overflow-wrap:anywhere}.site-cta:focus-visible,.site-nav-action:focus-visible{outline:3px solid var(--site-ink);outline-offset:4px}.site-audience{font-size:13px;color:color-mix(in srgb,var(--site-ink) 75%,transparent);overflow-wrap:anywhere}.site-features{min-width:0;padding-left:20px;margin:24px 0 0;color:color-mix(in srgb,var(--site-ink) 82%,transparent);font-size:14px;line-height:1.65;overflow-wrap:anywhere}.site-features li+li{margin-top:6px}
 .site-art{min-width:0;min-height:clamp(240px,28cqi,380px);display:flex;flex-direction:column;justify-content:center}.site-arch{position:relative;height:clamp(220px,35cqi,440px);max-width:430px;width:100%;margin:auto;background:color-mix(in srgb,var(--site-accent) 20%,var(--site-bg));border-radius:220px 220px 3px 3px;overflow:hidden}.site-orb{position:absolute;top:13%;right:16%;width:30%;aspect-ratio:1;border-radius:50%;background:color-mix(in srgb,var(--site-accent) 33%,#e9cda8)}.site-vase{position:absolute;z-index:1;bottom:17%;background:color-mix(in srgb,var(--site-ink) 70%,var(--site-bg));box-shadow:inset 12px 0 20px #ffffff21}.site-vase-one{height:35%;width:23%;left:16%;border-radius:43% 43% 17% 17%}.site-vase-one:before{content:"";position:absolute;width:34%;height:20%;top:-14%;left:33%;border-radius:3px 3px 0 0;background:inherit}.site-vase-two{height:27%;width:19%;right:14%;border-radius:40% 40% 12% 12%;background:color-mix(in srgb,var(--site-accent) 55%,#dbbca0)}.site-vase-two:before{content:"";position:absolute;width:38%;height:20%;top:-14%;left:31%;border-radius:3px 3px 0 0;background:inherit}.site-table{position:absolute;height:7%;bottom:13%;left:8%;right:8%;border-radius:2px;background:color-mix(in srgb,var(--site-ink) 43%,var(--site-bg))}.site-spark{position:absolute;top:18%;left:13%;color:var(--site-accent);font-size:30px}.site-art-caption{text-align:center;font-size:12px;color:color-mix(in srgb,var(--site-ink) 70%,transparent);padding:12px}.site-hero-image{display:block;width:min(100%,500px);height:auto;aspect-ratio:4/3;margin:auto;object-fit:cover;border-radius:12px}.site-bottom{border-top:1px solid color-mix(in srgb,var(--site-ink) 18%,transparent);padding-top:14px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 18px;text-transform:uppercase;letter-spacing:1px;font-size:11px;color:color-mix(in srgb,var(--site-ink) 72%,transparent)}
 .site-mock.split .site-hero{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr)}.site-mock.split .site-art{grid-column:2;grid-row:1}.site-mock.split .site-copy{grid-column:1;grid-row:1}
@@ -89,6 +91,9 @@ body{margin:0}
 .site-mock.minimalist .site-about-composition{border-top-color:color-mix(in srgb,var(--site-ink) 12%,transparent)}.site-mock.minimalist .site-about-story{border-left-width:1px}.site-mock.minimalist .site-about-highlight{border-top-color:color-mix(in srgb,var(--site-ink) 12%,transparent);padding-block:24px}.site-mock.minimalist .site-contact-action{background:transparent;box-shadow:none;border-width:1px}.site-mock.luxury .site-about-story{border-left-width:2px}.site-mock.luxury .site-about-story h3,.site-mock.luxury .site-about-introduction h2,.site-mock.luxury .site-contact-action h2{font-family:var(--site-heading-font,var(--site-serif));font-weight:400;letter-spacing:-.025em}.site-mock.luxury .site-contact-action{background:color-mix(in srgb,var(--site-bg) 88%,var(--site-accent));border-color:color-mix(in srgb,var(--site-accent) 48%,var(--site-bg))}.site-mock.bold .site-about-composition{border-top:4px solid var(--site-ink)}.site-mock.bold .site-about-highlight{border-top-width:3px;background:color-mix(in srgb,var(--site-bg) 91%,var(--site-accent));padding:20px}.site-mock.bold .site-contact-action{background:var(--site-ink);color:var(--site-bg);border:3px solid var(--site-accent);box-shadow:8px 8px 0 var(--site-accent)}.site-mock.bold .site-contact-action .site-kicker,.site-mock.bold .site-contact-action h2{color:var(--site-bg)}.site-mock.bold .site-contact-action .site-cta{background:var(--site-accent);color:var(--site-bg)}.site-mock.playful .site-about-highlight{border:1px solid color-mix(in srgb,var(--site-accent) 42%,var(--site-bg));border-radius:24px 24px 8px 24px;padding:20px;background:color-mix(in srgb,var(--site-bg) 92%,var(--site-accent))}.site-mock.playful .site-contact-action{border-radius:28px 28px 8px 28px;background:color-mix(in srgb,var(--site-bg) 88%,var(--site-accent))}.site-mock.professional .site-about-composition{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(24px,4cqi,56px)}.site-mock.professional .site-about-highlights{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}.site-mock.professional .site-about-highlight{grid-template-columns:30px minmax(0,1fr);border-top:1px solid color-mix(in srgb,var(--site-ink) 18%,transparent);padding:16px 0}.site-mock.professional .site-contact-action{background:transparent;border-width:1px 0;border-radius:0;box-shadow:none;padding-inline:0}.site-mock.professional .site-contact-information dl{border-top:1px solid color-mix(in srgb,var(--site-ink) 18%,transparent);padding-top:20px}
 @container site (max-width:700px){.site-about-composition{grid-template-columns:minmax(0,1fr);gap:30px;padding-block:32px}.site-contact-action{align-items:flex-start;flex-direction:column;gap:18px}.site-contact-information dl{grid-template-columns:minmax(0,1fr)}.site-mock.professional .site-about-composition{grid-template-columns:minmax(0,1fr)}.site-mock.professional .site-about-highlights{grid-template-columns:minmax(0,1fr)}.site-mock.bold .site-contact-action{box-shadow:5px 5px 0 var(--site-accent)}}
 @container site (max-width:700px){.site-mock.site-mock .site-hero{gap:clamp(18px,4cqi,32px)}.site-mock.site-mock main>section:not(.site-hero){padding-block:clamp(30px,6cqi,52px)}}
+/* Studio-only compositions: keep the export breakpoint and its stacking rules unchanged. */
+@container site (min-width:480px) and (max-width:700px){.site-mock.preview.split .site-hero{grid-template-columns:minmax(0,.88fr) minmax(0,1.12fr);gap:clamp(12px,3cqi,22px);min-height:0;padding-block:clamp(28px,5cqi,42px)}.site-mock.preview.split .site-copy{grid-column:1;grid-row:1}.site-mock.preview.split .site-art{grid-column:2;grid-row:1}.site-mock.preview.split .site-copy h1{font-size:clamp(30px,6cqi,44px);max-width:10ch;margin-block:10px 13px}.site-mock.preview.split .site-copy>p{font-size:clamp(13px,2.2cqi,15px);line-height:1.55}.site-mock.preview.split .site-actions{margin-top:16px}.site-mock.preview.split .site-features{grid-template-columns:minmax(0,1fr);font-size:12px;margin-top:14px}.site-mock.preview.split .site-art{min-height:0}.site-mock.preview.split .site-arch,.site-mock.preview.split .site-hero-image{aspect-ratio:4/5;height:auto}.site-mock.preview.editorial .site-hero{grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;padding-block:clamp(24px,4cqi,36px)}.site-mock.preview.editorial .site-art{grid-row:1;min-height:0}.site-mock.preview.editorial .site-arch,.site-mock.preview.editorial .site-hero-image{aspect-ratio:16/8;height:auto}.site-mock.preview.editorial .site-copy{grid-row:2;max-width:90%;margin-left:clamp(12px,5cqi,36px);padding-left:clamp(12px,3cqi,22px);border-left:1px solid color-mix(in srgb,var(--site-accent) 65%,transparent)}.site-mock.preview.editorial .site-copy h1{font-size:clamp(36px,7cqi,52px);max-width:11ch;margin-block:8px 12px;letter-spacing:-.055em}.site-mock.preview.editorial .site-actions{margin-top:17px}}
+@container site (max-width:479px){.site-mock.preview.editorial .site-hero{gap:8px;padding-block:28px}.site-mock.preview.editorial .site-art{order:-1;min-height:0}.site-mock.preview.editorial .site-arch,.site-mock.preview.editorial .site-hero-image{aspect-ratio:16/9;height:auto}.site-mock.preview.editorial .site-copy{max-width:92%;margin-left:8px;padding-left:13px;border-left:1px solid color-mix(in srgb,var(--site-accent) 65%,transparent)}.site-mock.preview.editorial .site-copy h1{max-width:11ch;font-size:clamp(34px,9cqi,42px)}.site-mock.preview.split .site-hero{gap:20px}.site-mock.preview.split .site-art,.site-mock.preview.split .site-copy{grid-column:auto;grid-row:auto}.site-mock.preview.split .site-art{order:1}.site-mock.preview.split .site-copy{order:0;border-top:2px solid var(--site-accent);padding-top:16px}}
 `;
 
 export const validateCtaDestination = validateSiteDestination;
@@ -98,11 +103,52 @@ export function escapeHtml(value: string): string {
 }
 
 type NavigationMarkupContext = {
-  mode: "preview" | "export";
+  mode: "preview" | "export" | "archive";
   currentPageId: string;
   pageKind?: SitePageKind;
   pages: readonly SiteNavigationPageReference[];
+  filenames?: ReadonlyMap<string, string>;
 };
+
+function logoFileExtension(mimeType: SiteLogoAsset["mimeType"]) {
+  return mimeType === "image/png" ? "png" : mimeType === "image/jpeg" ? "jpg" : "webp";
+}
+
+function relativeExportPath(targetFilename: string) {
+  // Archive pages are deliberately written at the same level.
+  return targetFilename;
+}
+
+function renderBrandLogo(businessName: string, context: NavigationMarkupContext, siteSettings: SiteSettings, logoAsset?: SiteLogoAsset | null, logoSource?: string) {
+  const name = escapeHtml(businessName);
+  const logoReference = SiteLogoAssetIdSchema.safeParse(siteSettings.branding?.logoAssetId);
+  const hasLogo = Boolean(logoReference.success && logoAsset && logoAsset.assetId === logoReference.data);
+  if (hasLogo && logoAsset) {
+    const source = escapeHtml(logoSource ?? logoAsset.dataUrl);
+    const imageAlt = siteSettings.branding.logoDisplayMode === "image-only" ? name : "";
+    const logo = `<img class="site-logo-image" src="${source}" alt="${imageAlt}" />${siteSettings.branding.logoDisplayMode === "image-with-name" ? `<span class="site-logo-name">${name}</span>` : ""}`;
+    if (context.mode === "archive") return `<a class="site-logo has-custom-logo" href="./index.html" aria-label="Return to homepage">${logo}</a>`;
+    if (context.mode === "preview") {
+      const homeExists = context.pages.some((page) => page.id === "home");
+      return homeExists
+        ? `<a class="site-logo has-custom-logo" href="#top" aria-label="Return to homepage">${logo}</a>`
+        : `<span class="site-logo has-custom-logo" aria-label="Homepage unavailable">${logo}</span>`;
+    }
+    return context.currentPageId === "home"
+      ? `<a class="site-logo has-custom-logo" href="#top" aria-label="Return to homepage">${logo}</a>`
+      : `<span class="site-logo has-custom-logo" aria-label="Homepage unavailable">${logo}</span>`;
+  }
+  if (context.mode === "archive") return `<a class="site-logo" href="./index.html" aria-label="Return to homepage">${name}</a>`;
+  if (context.mode === "preview") {
+    const homeExists = context.pages.some((page) => page.id === "home");
+    return homeExists
+      ? `<a class="site-logo" href="#top" aria-label="Return to homepage">${name}</a>`
+      : `<span class="site-logo" aria-label="Homepage unavailable">${name}</span>`;
+  }
+  return context.currentPageId === "home"
+    ? `<a class="site-logo" href="#top" aria-label="Return to homepage">${name}</a>`
+    : `<span class="site-logo" aria-label="Homepage unavailable">${name}</span>`;
+}
 
 function renderNavigation(siteSettings: SiteSettings, context: NavigationMarkupContext) {
   return siteSettings.navigation.map((entry) => {
@@ -111,6 +157,10 @@ function renderNavigation(siteSettings: SiteSettings, context: NavigationMarkupC
     if (!target || target.type === "none" || target.type === "unresolved") return `<span>${label}</span>`;
     if (target.type === "external") return `<a href="${escapeHtml(target.url)}">${label}</a>`;
     if (target.type === "page") {
+      if (context.mode === "archive") {
+        const filename = context.filenames?.get(target.pageId);
+        return filename ? `<a href="${escapeHtml(relativeExportPath(filename))}">${label}</a>` : `<span>${label}</span>`;
+      }
       return context.mode === "preview"
         ? `<button type="button" class="site-nav-button" data-site-navigation-action="page" data-page-id="${escapeHtml(target.pageId)}">${label}</button>`
         : `<span>${label}</span>`;
@@ -120,13 +170,17 @@ function renderNavigation(siteSettings: SiteSettings, context: NavigationMarkupC
         ? `<a href="${escapeHtml(target.anchor)}">${label}</a>`
         : `<a href="${escapeHtml(target.anchor)}">${label}</a>`;
     }
+    if (context.mode === "archive") {
+      const filename = context.filenames?.get(target.pageId);
+      return filename ? `<a href="${escapeHtml(relativeExportPath(filename))}${escapeHtml(target.anchor)}">${label}</a>` : `<span>${label}</span>`;
+    }
     return context.mode === "preview"
       ? `<button type="button" class="site-nav-button" data-site-navigation-action="page-section" data-page-id="${escapeHtml(target.pageId)}" data-site-navigation-anchor="${escapeHtml(target.anchor)}">${label}</button>`
       : `<span>${label}</span>`;
   }).join("");
 }
 
-function siteMarkup(page: GeneratedPage, siteSettings: SiteSettings, preview = false, heroImage: HeroImageAsset | null = null, template: SiteTemplate = DEFAULT_SITE_TEMPLATE, navigationContext?: NavigationMarkupContext): string {
+function siteMarkup(page: GeneratedPage, siteSettings: SiteSettings, preview = false, heroImage: HeroImageAsset | null = null, template: SiteTemplate = DEFAULT_SITE_TEMPLATE, navigationContext?: NavigationMarkupContext, heroImageSource?: string, logoAsset?: SiteLogoAsset | null, logoAssetSource?: string): string {
   const styleClass = page.style.toLowerCase();
   const classes = ["site-mock", ...(template.id === "restaurant" ? ["restaurant-site"] : []), ...(template.id === "fashion" ? ["fashion-site"] : []), ...(template.id === "real-estate" ? ["real-estate-site"] : []), styleClass, page.layout, ...(preview ? ["preview"] : [])].join(" ");
   const appearanceStyle = siteStyleTokensCss(page.style, siteSettings.appearance);
@@ -138,15 +192,50 @@ function siteMarkup(page: GeneratedPage, siteSettings: SiteSettings, preview = f
   const availableSectionAnchors = new Set(siteNavigationDestinationOptions(template, navigationContext?.pageKind).map(({ destination }) => destination));
   const ctaDestinationResult = SiteSettingsSchema.shape.ctaDestination.safeParse(siteSettings.ctaDestination);
   const candidateCtaHref = ctaDestinationResult.success ? validateSiteDestination(ctaDestinationResult.data) : undefined;
-  const ctaHref = candidateCtaHref?.startsWith("#") && !availableSectionAnchors.has(candidateCtaHref) ? undefined : candidateCtaHref;
-  const cta = ctaHref
+  const legacyCtaTarget = siteCtaTargetFromLegacy(ctaDestinationResult.success ? ctaDestinationResult.data : "");
+  const typedCtaTarget = SiteCtaTargetSchema.safeParse(siteSettings.ctaTarget);
+  const ctaTarget: SiteCtaTarget = typedCtaTarget.success ? typedCtaTarget.data : legacyCtaTarget;
+  let ctaHref = candidateCtaHref?.startsWith("#") && !availableSectionAnchors.has(candidateCtaHref) ? undefined : candidateCtaHref;
+  if (navigationContext?.mode === "export") {
+    if (ctaTarget.type === "none") ctaHref = undefined;
+    else if (ctaTarget.type === "external") ctaHref = ctaTarget.url;
+    else if (ctaTarget.type === "current-section") ctaHref = availableSectionAnchors.has(ctaTarget.anchor) ? ctaTarget.anchor : undefined;
+    else if (ctaTarget.pageId !== navigationContext.currentPageId) ctaHref = undefined;
+    else if (ctaTarget.type === "page") ctaHref = "#top";
+    else ctaHref = availableSectionAnchors.has(ctaTarget.anchor) ? ctaTarget.anchor : undefined;
+  } else if (navigationContext?.mode === "archive") {
+    if (ctaTarget.type === "none") ctaHref = undefined;
+    else if (ctaTarget.type === "external") ctaHref = ctaTarget.url;
+    else if (ctaTarget.type === "current-section") ctaHref = availableSectionAnchors.has(ctaTarget.anchor) ? ctaTarget.anchor : undefined;
+    else {
+      const targetPage = navigationContext.pages.find((candidate) => candidate.id === ctaTarget.pageId);
+      const filename = navigationContext.filenames?.get(ctaTarget.pageId);
+      const validSection = ctaTarget.type !== "section" || (targetPage && siteNavigationDestinationOptions(targetPage.template, targetPage.kind).some((option) => option.destination === ctaTarget.anchor));
+      ctaHref = filename && targetPage && validSection
+        ? `${relativeExportPath(filename)}${ctaTarget.type === "section" ? escapeHtml(ctaTarget.anchor) : ""}`
+        : undefined;
+    }
+  } else if (navigationContext?.mode === "preview" && (ctaTarget.type === "page" || ctaTarget.type === "section")) {
+    const targetPage = navigationContext.pages.find((candidate) => candidate.id === ctaTarget.pageId);
+    const validSection = ctaTarget.type !== "section" || (targetPage && siteNavigationDestinationOptions(targetPage.template, targetPage.kind).some((option) => option.destination === ctaTarget.anchor));
+    if (!targetPage || !validSection) ctaHref = undefined;
+    else if (ctaTarget.pageId === navigationContext.currentPageId) ctaHref = ctaTarget.type === "section" ? ctaTarget.anchor : "#top";
+    else ctaHref = undefined;
+  }
+  const previewTarget = navigationContext?.mode === "preview" && (ctaTarget.type === "page" || ctaTarget.type === "section") && ctaTarget.pageId !== navigationContext.currentPageId
+    ? ctaTarget : undefined;
+  const cta = previewTarget
+    ? `<button type="button" class="site-cta" data-site-navigation-action="${previewTarget.type === "section" ? "page-section" : "page"}" data-page-id="${escapeHtml(previewTarget.pageId)}"${previewTarget.type === "section" ? ` data-site-navigation-anchor="${escapeHtml(previewTarget.anchor)}"` : ""}>${escapeHtml(page.callToAction)} <span aria-hidden="true">↗</span></button>`
+    : ctaHref
     ? `<a class="site-cta" href="${escapeHtml(ctaHref)}">${escapeHtml(page.callToAction)} <span aria-hidden="true">↗</span></a>`
     : `<span class="site-cta site-cta-text">${escapeHtml(page.callToAction)}</span>`;
   const features = page.features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join("");
   const navigation = renderNavigation(siteSettings, defaultNavigationContext);
+  const brandLogo = renderBrandLogo(page.businessName, defaultNavigationContext, siteSettings, logoAsset, logoAssetSource);
+  const withBrandLogo = (markup: string) => markup.replaceAll(`<span class="site-logo">${escapeHtml(page.businessName)}</span>`, brandLogo);
   const restaurantFallback = `<div class="restaurant-artboard"><div class="restaurant-steam"></div><div class="restaurant-plate"><div class="restaurant-rice"></div><div class="restaurant-chicken"></div><i class="restaurant-chicken-bone"></i><div class="restaurant-plantain"><i class="restaurant-plantain-slice restaurant-plantain-slice-one"></i><i class="restaurant-plantain-slice restaurant-plantain-slice-two"></i><i class="restaurant-plantain-slice restaurant-plantain-slice-three"></i></div><i class="restaurant-leaf restaurant-leaf-one"></i><i class="restaurant-leaf restaurant-leaf-two"></i><i class="restaurant-leaf restaurant-leaf-three"></i></div><div class="restaurant-grill"></div></div>`;
-  const art = heroImage
-    ? `<div class="site-art" aria-hidden="true"><img class="site-hero-image" src="${escapeHtml(heroImageDataUrl(heroImage))}" alt="" /></div>`
+  const art = heroImage || heroImageSource
+    ? `<div class="site-art" aria-hidden="true"><img class="site-hero-image" src="${escapeHtml(heroImageSource ?? heroImageDataUrl(heroImage!))}" alt="" /></div>`
     : template.id === "restaurant"
       ? `<div class="site-art restaurant-art" aria-hidden="true">${restaurantFallback}</div>`
       : template.id === "fashion"
@@ -156,33 +245,33 @@ function siteMarkup(page: GeneratedPage, siteSettings: SiteSettings, preview = f
         : `<div class="site-art" aria-hidden="true"><div class="site-arch"><div class="site-orb"></div><div class="site-vase site-vase-one"></div><div class="site-vase site-vase-two"></div><div class="site-table"></div><span class="site-spark">✳</span></div><span class="site-art-caption">Fig. 01 — The everyday edit</span></div>`;
 
   if (navigationContext?.pageKind === "about") {
-    return aboutMarkup(`${classes} site-about-page`, appearanceStyle, page, template, navigation, cta, art);
+    return withBrandLogo(aboutMarkup(`${classes} site-about-page`, appearanceStyle, page, template, navigation, cta, art));
   }
   if (navigationContext?.pageKind === "contact") {
-    return contactMarkup(`${classes} site-contact-page`, appearanceStyle, page, template, navigation, cta, art);
+    return withBrandLogo(contactMarkup(`${classes} site-contact-page`, appearanceStyle, page, template, navigation, cta, art));
   }
 
   if (template.id === "restaurant") {
     return navigationContext?.pageKind === "services"
-      ? restaurantMenuMarkup(`${classes} restaurant-menu-page`, appearanceStyle, page, template.content, navigation, cta, art)
-      : restaurantMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art);
+      ? withBrandLogo(restaurantMenuMarkup(`${classes} restaurant-menu-page`, appearanceStyle, page, template.content, navigation, cta, art))
+      : withBrandLogo(restaurantMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art));
   }
   if (template.id === "fashion") {
     return navigationContext?.pageKind === "products"
-      ? fashionCollectionsMarkup(`${classes} fashion-collections-page`, appearanceStyle, page, template.content, navigation, cta, art)
-      : fashionMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art);
+      ? withBrandLogo(fashionCollectionsMarkup(`${classes} fashion-collections-page`, appearanceStyle, page, template.content, navigation, cta, art))
+      : withBrandLogo(fashionMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art));
   }
   if (template.id === "real-estate") {
     return navigationContext?.pageKind === "services"
-      ? realEstatePropertiesMarkup(`${classes} real-estate-properties-page`, appearanceStyle, page, template.content, navigation, cta, art)
-      : realEstateMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art);
+      ? withBrandLogo(realEstatePropertiesMarkup(`${classes} real-estate-properties-page`, appearanceStyle, page, template.content, navigation, cta, art))
+      : withBrandLogo(realEstateMarkup(classes, appearanceStyle, page, template.content, navigation, cta, art));
   }
 
   if (navigationContext?.pageKind === "services" || navigationContext?.pageKind === "products") {
-    return genericPurposeMarkup(classes, appearanceStyle, page, navigationContext.pageKind, navigation, cta, art);
+    return withBrandLogo(genericPurposeMarkup(classes, appearanceStyle, page, navigationContext.pageKind, navigation, cta, art));
   }
 
-  return `<div class="${classes}" style="${escapeHtml(appearanceStyle)}"><header id="top" class="site-nav"><span class="site-logo">${escapeHtml(page.businessName)}</span><nav class="site-nav-links" aria-label="Website sections">${navigation}</nav></header><main><section class="site-hero" aria-labelledby="site-headline"><div class="site-copy"><span class="site-kicker">MADE WITH INTENTION <i aria-hidden="true">✦</i></span><h1 id="site-headline">${escapeHtml(page.headline)}</h1><p>${escapeHtml(page.subheadline)}</p><div class="site-actions">${cta}<span class="site-audience">For ${escapeHtml(page.audience)}</span></div><ul class="site-features">${features}</ul></div>${art}</section></main><footer class="site-bottom"><span>Designed for the everyday</span><span>01 / 03</span></footer></div>`;
+  return withBrandLogo(`<div class="${classes}" style="${escapeHtml(appearanceStyle)}"><header id="top" class="site-nav"><span class="site-logo">${escapeHtml(page.businessName)}</span><nav class="site-nav-links" aria-label="Website sections">${navigation}</nav></header><main><section class="site-hero" aria-labelledby="site-headline"><div class="site-copy"><span class="site-kicker">MADE WITH INTENTION <i aria-hidden="true">✦</i></span><h1 id="site-headline">${escapeHtml(page.headline)}</h1><p>${escapeHtml(page.subheadline)}</p><div class="site-actions">${cta}<span class="site-audience">For ${escapeHtml(page.audience)}</span></div><ul class="site-features">${features}</ul></div>${art}</section></main><footer class="site-bottom"><span>Designed for the everyday</span><span>01 / 03</span></footer></div>`);
 }
 
 function aboutMarkup(classes: string, appearanceStyle: string, page: GeneratedPage, template: SiteTemplate, navigation: string, cta: string, art: string) {
@@ -271,7 +360,7 @@ function realEstateMarkup(classes: string, appearanceStyle: string, page: Genera
   return `<div class="${classes}" style="${escapeHtml(appearanceStyle)}"><header id="top" class="site-nav real-estate-nav"><span class="site-logo">${escapeHtml(page.businessName)}</span><nav class="site-nav-links" aria-label="Real estate agency navigation">${navigation}</nav></header><main><section class="site-hero real-estate-hero" aria-labelledby="site-headline"><div class="site-copy real-estate-copy"><span class="site-kicker">REAL ESTATE <i aria-hidden="true">✦</i></span><h1 id="site-headline">${escapeHtml(page.headline)}</h1><p>${escapeHtml(page.subheadline)}</p><div class="site-actions">${cta}<span class="site-audience">For ${escapeHtml(page.audience)}</span></div></div>${art}</section><section class="real-estate-properties" id="site-properties" aria-labelledby="real-estate-properties-heading"><div class="real-estate-section-heading"><div><span class="site-kicker">PROPERTY IDEAS / 01—0${content.featuredProperties.length}</span><h2 id="real-estate-properties-heading">Property highlights</h2></div></div><ul class="real-estate-property-list">${properties}</ul></section>${story}</main><footer class="site-bottom real-estate-footer"><span>${escapeHtml(page.businessName)}</span><a href="#top">Back to top</a></footer></div>`;
 }
 
-export function renderGeneratedWebsite(page: GeneratedPage, siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS, heroImage: HeroImageAsset | null = null, template: SiteTemplate = DEFAULT_SITE_TEMPLATE, navigation?: Omit<NavigationMarkupContext, "mode">): string {
+export function renderGeneratedWebsite(page: GeneratedPage, siteSettings: SiteSettings = DEFAULT_SITE_SETTINGS, heroImage: HeroImageAsset | null = null, template: SiteTemplate = DEFAULT_SITE_TEMPLATE, navigation?: Omit<NavigationMarkupContext, "mode">, logoAsset?: SiteLogoAsset | null): string {
   // Editor fields may be temporarily below their final submission limits while
   // the user is typing. Restrict class-generating values, while escaping all copy.
   const style = VisualStyleSchema.parse(page.style);
@@ -287,7 +376,7 @@ export function renderGeneratedWebsite(page: GeneratedPage, siteSettings: SiteSe
     pageKind: navigation?.pageKind ?? "home",
     pages: navigation?.pages ?? [{ id: navigation?.currentPageId ?? "home", template: resolvedTemplate }],
   };
-  return siteMarkup({ ...page, style, layout }, siteSettings, true, validatedImage, resolvedTemplate, navigationContext);
+  return siteMarkup({ ...page, style, layout }, siteSettings, true, validatedImage, resolvedTemplate, navigationContext, undefined, logoAsset);
 }
 
 export function sanitizeExportFilename(businessName: string): string {
@@ -296,7 +385,7 @@ export function sanitizeExportFilename(businessName: string): string {
   return `weblander-${slug || "website"}.html`;
 }
 
-export function createWebsiteExport(page: unknown, layout: unknown, settingsOrDestination: SiteSettings | string = DEFAULT_SITE_SETTINGS, heroImage: unknown = null, template: unknown = DEFAULT_SITE_TEMPLATE, navigation?: Omit<NavigationMarkupContext, "mode">): { html: string; filename: string } {
+export function createWebsiteExport(page: unknown, layout: unknown, settingsOrDestination: SiteSettings | string = DEFAULT_SITE_SETTINGS, heroImage: unknown = null, template: unknown = DEFAULT_SITE_TEMPLATE, navigation?: Omit<NavigationMarkupContext, "mode">, logoAsset?: SiteLogoAsset | null): { html: string; filename: string } {
   const validatedPage = GeneratedPageSchema.parse({ ...(page as object), layout });
   const settings = SiteSettingsSchema.parse(typeof settingsOrDestination === "string"
     ? { ...DEFAULT_SITE_SETTINGS, ctaDestination: settingsOrDestination }
@@ -304,6 +393,7 @@ export function createWebsiteExport(page: unknown, layout: unknown, settingsOrDe
   const contrast = validateAppearanceContrast(validatedPage.style, settings.appearance);
   if (!contrast.valid) throw new Error("The selected appearance does not meet the website contrast requirements.");
   const validatedImage = heroImage === null ? null : HeroImageAssetSchema.parse(heroImage);
+  const validatedLogo = isValidSiteLogoAsset(logoAsset) && settings.branding.logoAssetId === logoAsset.assetId ? logoAsset : null;
   const validatedTemplate = SiteTemplateSchema.parse(template);
   const title = escapeHtml(validatedPage.businessName);
   const description = escapeHtml(validatedPage.subheadline);
@@ -313,8 +403,65 @@ export function createWebsiteExport(page: unknown, layout: unknown, settingsOrDe
     pageKind: navigation?.pageKind ?? "home",
     pages: navigation?.pages ?? [{ id: navigation?.currentPageId ?? "home", template: validatedTemplate }],
   };
-  const markup = siteMarkup(validatedPage, settings, false, validatedImage, validatedTemplate, navigationContext);
-  const imagePolicy = validatedImage ? " img-src data:" : "";
+  const markup = siteMarkup(validatedPage, settings, false, validatedImage, validatedTemplate, navigationContext, undefined, validatedLogo);
+  const imagePolicy = validatedImage || validatedLogo ? " img-src data:" : "";
   const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="description" content="${description}">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';${imagePolicy} base-uri 'none'; form-action 'none'">\n<title>${title}</title>\n<style>${GENERATED_SITE_CSS}</style>\n</head>\n<body>\n${markup}\n</body>\n</html>`;
   return { html, filename: sanitizeExportFilename(validatedPage.businessName) };
+}
+
+export type WebsiteArchiveFile = { path: string; data: string | Uint8Array; compression: "deflate" | "store" };
+
+function archivePageFilename(page: ProjectPage, used: Set<string>) {
+  if (page.id === "home") return "index.html";
+  const base = page.slug.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "") || "page";
+  let filename = `${base}.html`;
+  if (used.has(filename)) {
+    const suffix = page.id.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "page";
+    filename = `${base}-${suffix}.html`;
+    let index = 2;
+    while (used.has(filename)) filename = `${base}-${suffix}-${index++}.html`;
+  }
+  used.add(filename);
+  return filename;
+}
+
+/** Validate and render all stored pages into a relative-path static-site file set. */
+export function createMultiPageWebsiteFiles(snapshot: unknown, logoAsset?: SiteLogoAsset | null): WebsiteArchiveFile[] {
+  const project: ProjectSnapshot = ProjectSnapshotSchema.parse(snapshot);
+  const includedLogo = isValidSiteLogoAsset(logoAsset) && project.siteSettings.branding.logoAssetId === logoAsset.assetId
+    ? logoAsset
+    : null;
+  const logoSource = includedLogo ? `assets/logo.${logoFileExtension(includedLogo.mimeType)}` : undefined;
+  const filenames = new Map<string, string>();
+  const used = new Set(["index.html"]);
+  for (const page of project.pages) filenames.set(page.id, page.id === "home" ? "index.html" : archivePageFilename(page, used));
+  const pageReferences = project.pages.map((page) => ({ id: page.id, slug: page.slug, title: page.title, kind: page.kind, template: page.template }));
+  const files: WebsiteArchiveFile[] = [];
+  for (const record of project.pages) {
+    const filename = filenames.get(record.id)!;
+    const page: GeneratedPage = {
+      ...project.brief,
+      headline: record.content.headline,
+      subheadline: record.content.description,
+      features: record.content.features,
+      callToAction: record.content.callToAction,
+      layout: project.layout,
+    };
+    const context: NavigationMarkupContext = { mode: "archive", currentPageId: record.id, pageKind: record.kind, pages: pageReferences, filenames };
+    const markup = siteMarkup(page, project.siteSettings, false, null, record.template, context, project.heroImage ? "assets/hero" + (project.heroImage.mimeType === "image/png" ? ".png" : project.heroImage.mimeType === "image/jpeg" ? ".jpg" : ".webp") : undefined, includedLogo, logoSource);
+    const title = escapeHtml(record.title || project.brief.businessName);
+    const description = escapeHtml(record.content.description);
+    const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="description" content="${description}">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">\n<title>${title}</title>\n<link rel="stylesheet" href="assets/site.css">\n</head>\n<body>\n${markup}\n</body>\n</html>`;
+    files.push({ path: filename, data: html, compression: "deflate" });
+  }
+  files.push({ path: "assets/site.css", data: GENERATED_SITE_CSS, compression: "deflate" });
+  if (project.heroImage) {
+    const decoded = atob(project.heroImage.base64);
+    const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+    const extension = project.heroImage.mimeType === "image/png" ? "png" : project.heroImage.mimeType === "image/jpeg" ? "jpg" : "webp";
+    files.push({ path: `assets/hero.${extension}`, data: bytes, compression: "store" });
+  }
+  if (includedLogo) files.push({ path: logoSource!, data: includedLogo.bytes, compression: "store" });
+  return files;
 }

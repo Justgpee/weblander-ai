@@ -8,9 +8,11 @@ type FashionEditorProps = {
   pageId: string;
   content: FashionContent;
   onChange: (content: FashionContent | null) => void;
+  regeneration: { loading: boolean; error: string; disabled?: boolean };
+  onRegenerate: () => void;
 };
 
-export function FashionEditor({ pageId, content, onChange }: FashionEditorProps) {
+export function FashionEditor({ pageId, content, onChange, regeneration, onRegenerate }: FashionEditorProps) {
   const [draft, setDraft] = useState<FashionContentDraft>(() => fashionContentToDraft(content));
   const validation = validateFashionContentDraft(draft);
   const idPrefix = `${pageId}-fashion`;
@@ -41,7 +43,9 @@ export function FashionEditor({ pageId, content, onChange }: FashionEditorProps)
         <div className="restaurant-editor-heading">
           <div><strong>Collection highlights</strong><span>Describe collection themes. Product catalog details are not supported here.</span></div>
           <button type="button" onClick={() => update({ ...draft, collectionHighlights: [...draft.collectionHighlights, { name: "", description: "" }] })} disabled={draft.collectionHighlights.length >= 4}>Add collection</button>
+          <button type="button" onClick={onRegenerate} disabled={regeneration.loading || regeneration.disabled} aria-busy={regeneration.loading}>{regeneration.loading ? "Regenerating collection highlights…" : "Regenerate collection highlights"}</button>
         </div>
+        {regeneration.error && <p role="alert" className="restaurant-editor-error">{regeneration.error}</p>}
         <div className="restaurant-editor-menu">
           {draft.collectionHighlights.map((highlight, index) => {
             const nameError = fieldError(`Collection highlight ${index + 1} name`);

@@ -13,7 +13,8 @@ import {
   ProjectCollectionV7Schema,
   ProjectCollectionV8Schema,
   ProjectCollectionV9Schema,
-  ProjectCollectionV10Schema,
+  ProjectCollectionV11Schema,
+  ProjectCollectionV12Schema,
   ProjectRecordSchema,
   ProjectRecordV6Schema,
   ProjectRecordV5Schema,
@@ -21,6 +22,7 @@ import {
   ProjectRecordV8Schema,
   ProjectRecordV9Schema,
   ProjectRecordV10Schema,
+  ProjectRecordV12Schema,
   ProjectStorageError,
   createProjectStorage,
   pageFromProject,
@@ -79,9 +81,12 @@ function homePage(project: ProjectRecord) {
 }
 
 function legacySettings(project: ProjectRecord) {
+  const { ctaTarget, branding: _branding, ...legacy } = project.siteSettings;
+  void ctaTarget;
+  void _branding;
   return {
-    ...project.siteSettings,
-    navigation: project.siteSettings.navigation.map(({ label, destination }) => ({ label, destination })),
+    ...legacy,
+    navigation: legacy.navigation.map(({ label, destination }) => ({ label, destination })),
   };
 }
 
@@ -121,12 +126,61 @@ function v9Record(project: ProjectRecord) {
 }
 
 describe("persisted project schemas", () => {
+  it("restores a just-created project with its stable ID and complete snapshot from a fresh storage reader", () => {
+    const { storage, projects } = setup();
+    const snapshot = projectSnapshotFromPage(brief, { ...page, headline: "The restaurant is ready to reopen." }, "split");
+    const created = projects.create("Northline Restaurant", snapshot, "00000000-0000-4000-8000-000000000041");
+    const reopenedStorage = createProjectStorage({ storage });
+    const restored = reopenedStorage.load(created.id);
+
+    expect(restored.id).toBe(created.id);
+    expect(restored.brief).toEqual(brief);
+    expect(restored.pages[0].content.headline).toBe("The restaurant is ready to reopen.");
+    expect(restored.layout).toBe("split");
+    expect(reopenedStorage.list().map((project) => project.id)).toEqual([created.id]);
+  });
+
+  it("preserves existing records after a quota failure and retries the draft with the same ID once", () => {
+    const { storage, projects } = setup();
+    const earlier = ["Studio One", "Studio Two", "Studio Three"].map((name) => projects.create(name, projectSnapshotFromPage(brief, page, "editorial")));
+    const draftId = "00000000-0000-4000-8000-000000000042";
+    const existingCollection = storage.value;
+    storage.failWrite = Object.assign(new Error("quota"), { name: "QuotaExceededError" });
+    expect(() => projects.create("Northline Restaurant", projectSnapshotFromPage(brief, page, "split"), draftId))
+      .toThrowError("There is not enough browser storage space to save this project.");
+    expect(storage.value).toBe(existingCollection);
+    expect(projects.list().map((project) => project.id).sort()).toEqual(earlier.map((project) => project.id).sort());
+
+    storage.failWrite = null;
+    const saved = projects.create("Northline Restaurant", projectSnapshotFromPage(brief, page, "split"), draftId);
+    expect(saved.id).toBe(draftId);
+    expect(projects.list()).toHaveLength(4);
+    expect(projects.load(draftId).layout).toBe("split");
+    const updated = projects.save(saved.id, projectSnapshotFromPage(brief, { ...page, headline: "Latest restaurant headline" }, "split"), saved.revision);
+    expect(projects.list()).toHaveLength(4);
+    expect(projects.load(draftId).pages[0].content.headline).toBe("Latest restaurant headline");
+    expect(projects.list().find((project) => project.id === earlier[0].id)).toEqual(earlier[0]);
+    expect(updated.id).toBe(draftId);
+  });
+
+  it("persists the latest rapid edit without crossing project boundaries", () => {
+    const { projects } = setup();
+    const first = projects.create("First", projectSnapshotFromPage(brief, page, "editorial"));
+    const second = projects.create("Second", projectSnapshotFromPage({ ...brief, businessName: "Second" }, page, "split"));
+    const firstRevision = projects.save(first.id, projectSnapshotFromPage(brief, { ...page, headline: "Intermediate headline" }, "editorial"), first.revision);
+    projects.save(first.id, projectSnapshotFromPage(brief, { ...page, headline: "Latest headline" }, "editorial"), firstRevision.revision);
+
+    expect(projects.load(first.id).pages[0].content.headline).toBe("Latest headline");
+    expect(projects.load(second.id)).toEqual(second);
+  });
+
   it("validates strict project records and collection versions", () => {
     const { projects } = setup();
     const saved = projects.create("Northline", projectSnapshotFromPage(brief, page, "split"));
     expect(homePage(saved).template).toEqual(DEFAULT_SITE_TEMPLATE);
     expect(ProjectRecordV9Schema.safeParse(saved).success).toBe(false);
-    expect(ProjectRecordV10Schema.safeParse(saved).success).toBe(true);
+    expect(ProjectRecordV10Schema.safeParse(saved).success).toBe(false);
+    expect(ProjectRecordV12Schema.safeParse(saved).success).toBe(true);
     expect(saved.pages).toHaveLength(1);
     expect(saved.pages[0]).toMatchObject({ id: "home", slug: "index", title: "Home", kind: "home" });
     expect(ProjectRecordV8Schema.safeParse(v8Record(saved)).success).toBe(true);
@@ -197,6 +251,37 @@ describe("persisted project schemas", () => {
       ],
     } }).success).toBe(false);
   });
+
+  it("migrates v11 projects to the v12 default branding without writing during reads", () => {
+    const { storage, projects } = setup();
+    const created = projects.create("Northline", projectSnapshotFromPage(brief, page, "editorial"));
+    const { branding: _branding, ...v11Settings } = created.siteSettings;
+    void _branding;
+    const v11 = { version: 11, projects: [{ ...created, siteSettings: v11Settings }] };
+    expect(ProjectCollectionV11Schema.safeParse(v11).success).toBe(true);
+    storage.value = JSON.stringify(v11);
+    const writeCount = storage.writes;
+
+    const migrated = projects.load(created.id);
+    expect(migrated.siteSettings.branding).toEqual({ logoAssetId: null, logoDisplayMode: "image-with-name" });
+    expect(storage.writes).toBe(writeCount);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(11);
+    expect(ProjectCollectionV12Schema.safeParse({ version: 12, projects: [migrated] }).success).toBe(true);
+  });
+
+  it("persists logo references and display preference through save and reopen", () => {
+    const { projects } = setup();
+    const logoAssetId = "33333333-3333-4333-8333-333333333333";
+    const settings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
+      branding: { logoAssetId, logoDisplayMode: "image-only" },
+    };
+    const created = projects.create("Northline", projectSnapshotFromPage(brief, page, "editorial", settings));
+    expect(projects.load(created.id).siteSettings.branding).toEqual({ logoAssetId, logoDisplayMode: "image-only" });
+    const removed = { ...created.siteSettings, branding: { logoAssetId: null, logoDisplayMode: "image-with-name" as const } };
+    projects.save(created.id, projectSnapshotFromPage(brief, page, "editorial", removed), created.revision);
+    expect(projects.load(created.id).siteSettings.branding).toEqual({ logoAssetId: null, logoDisplayMode: "image-with-name" });
+  });
 });
 
 describe("v8 page-kind migration and complete page snapshots", () => {
@@ -230,8 +315,8 @@ describe("v8 page-kind migration and complete page snapshots", () => {
 
     const saved = projects.save(loaded.id, projectSnapshotFromPages(loaded.brief, loaded.pages, loaded.layout, loaded.siteSettings, loaded.heroImage), loaded.revision);
     expect(saved.pages.map(({ kind }) => kind)).toEqual(["legacy", "about", "legacy", "legacy"]);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
-    expect(ProjectCollectionV10Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
+    expect(ProjectCollectionV12Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
   });
 
   it("preserves complete ordered page snapshots and derives editable page state without mutating records", () => {
@@ -297,9 +382,29 @@ describe("local project storage", () => {
 
     const saved = projects.save(loaded.id, projectSnapshotFromPages(loaded.brief, loaded.pages, loaded.layout, loaded.siteSettings, loaded.heroImage), loaded.revision);
     const persisted = JSON.parse(storage.value ?? "{}");
-    expect(persisted.version).toBe(10);
-    expect(ProjectCollectionV10Schema.safeParse(persisted).success).toBe(true);
+    expect(persisted.version).toBe(12);
+    expect(ProjectCollectionV12Schema.safeParse(persisted).success).toBe(true);
     expect(saved.siteSettings.navigation.map(({ label }) => label)).toEqual(["No destination", "Order online", "Menu highlights"]);
+  });
+
+  it("migrates v10 CTA strings to typed v11 targets without guessing page paths", () => {
+    for (const [destination, expected] of [
+      ["", { type: "none" }],
+      ["https://example.com/book", { type: "external", url: "https://example.com/book" }],
+      ["#site-headline", { type: "current-section", anchor: "#site-headline" }],
+    ] as const) {
+      const { storage, projects } = setup();
+      const settings = { ...DEFAULT_SITE_SETTINGS, ctaDestination: destination };
+      const created = projects.create("Northline", projectSnapshotFromPage(brief, page, "split", settings));
+      const { ctaTarget, branding: _branding, ...v10Settings } = created.siteSettings;
+      void ctaTarget;
+      void _branding;
+      storage.value = JSON.stringify({ version: 10, projects: [{ ...created, siteSettings: v10Settings }] });
+      const migrated = projects.load(created.id);
+      expect(migrated.siteSettings.ctaTarget).toEqual(expected);
+      expect(migrated.siteSettings.ctaDestination).toBe(destination);
+      expect(storage.writes).toBe(1);
+    }
   });
 
   it("preserves safe but non-rendered legacy anchors as unresolved inactive targets", () => {
@@ -403,6 +508,7 @@ describe("local project storage", () => {
   it("round-trips the original brief separately from edited page content and restores layout and CTA", () => {
     const { storage, projects } = setup();
     const siteSettings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
       navigation: [
         { label: "Our work", destination: "#site-headline" },
         { label: "Collections", destination: "https://example.com/collections" },
@@ -531,7 +637,7 @@ describe("local project storage", () => {
     expect(storage.writes).toBe(writesBeforeRead);
     const saved = projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings), loaded.revision);
     expect(saved.revision).toBe(8);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
   });
 
   it("migrates v2 settings without changing project data and adds default appearance in memory", () => {
@@ -552,7 +658,7 @@ describe("local project storage", () => {
     });
     expect(storage.writes).toBe(writesBeforeRead);
     projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings, loaded.heroImage, siteTemplateFromProject(loaded)), loaded.revision);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
   });
 
   it("migrates validated v3 projects to v7 without writes and preserves their settings and revisions", () => {
@@ -571,7 +677,7 @@ describe("local project storage", () => {
     });
     expect(storage.writes).toBe(writesBeforeRead);
     projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings, loaded.heroImage, siteTemplateFromProject(loaded)), loaded.revision);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
   });
 
   it("migrates fully validated v4 projects to generic v7 in memory without losing settings or image", () => {
@@ -598,13 +704,14 @@ describe("local project storage", () => {
     expect(storage.writes).toBe(writesBeforeRead);
     const saved = projects.save(loaded.id, projectSnapshotFromPage(loaded.brief, page, loaded.layout, loaded.siteSettings, loaded.heroImage, siteTemplateFromProject(loaded)), loaded.revision);
     expect(saved.revision).toBe(original.revision + 1);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
     expect(JSON.parse(storage.value ?? "{}").projects[0].pages[0].template).toEqual(DEFAULT_SITE_TEMPLATE);
   });
 
   it("migrates strict v5 records to v7 in memory and writes v7 only on a successful mutation", () => {
     const { storage, projects } = setup();
     const settings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
       navigation: [
         { label: "Our story", destination: "#site-story" },
         { label: "Menu", destination: "#site-menu" },
@@ -645,7 +752,7 @@ describe("local project storage", () => {
       loaded.brief, page, loaded.layout, loaded.siteSettings, loaded.heroImage, siteTemplateFromProject(loaded),
     ), loaded.revision);
     const written = JSON.parse(storage.value ?? "{}") as { version: number; projects: Array<Record<string, unknown>> };
-    expect(written.version).toBe(10);
+    expect(written.version).toBe(12);
     expect(persisted.revision).toBe(10);
     expect(written.projects.find((project) => project.id === saved.id)).toMatchObject({
       id: saved.id,
@@ -658,7 +765,7 @@ describe("local project storage", () => {
       revision: 10,
     });
     expect(written.projects.find((project) => project.id === generic.id)).toEqual(generic);
-    expect(ProjectCollectionV10Schema.safeParse(written).success).toBe(true);
+    expect(ProjectCollectionV12Schema.safeParse(written).success).toBe(true);
   });
 
   it("creates, saves, and renames Fashion projects using the v8 schema", () => {
@@ -691,7 +798,7 @@ describe("local project storage", () => {
     const renamed = projects.rename(reopened.id, "Northline Fashion", reopened.revision);
     expect(siteTemplateFromProject(reopened)).toEqual(editedTemplate);
     expect(siteTemplateFromProject(renamed)).toEqual(editedTemplate);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
     expect(ProjectCollectionSchema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
   });
 
@@ -740,7 +847,7 @@ describe("local project storage", () => {
       loadedFashion.brief, page, loadedFashion.layout, loadedFashion.siteSettings, loadedFashion.heroImage, siteTemplateFromProject(loadedFashion),
     ), loadedFashion.revision);
     const persisted = JSON.parse(storage.value ?? "{}") as { version: number; projects: Array<Record<string, unknown>> };
-    expect(persisted.version).toBe(10);
+    expect(persisted.version).toBe(12);
     expect(savedFashion.revision).toBe(10);
     expect(persisted.projects.find((item) => item.id === generic.id)).toEqual(generic);
     expect(persisted.projects.find((item) => item.id === restaurant.id)).toEqual({ ...restaurant, revision: 4 });
@@ -749,7 +856,7 @@ describe("local project storage", () => {
       siteSettings: fashion.siteSettings, heroImage, revision: 10,
       createdAt: fashion.createdAt, updatedAt: expect.any(String),
     });
-    expect(ProjectCollectionV10Schema.safeParse(persisted).success).toBe(true);
+    expect(ProjectCollectionV12Schema.safeParse(persisted).success).toBe(true);
   });
 
   it("migrates v7 records into one home page without writing until a successful mutation", () => {
@@ -801,8 +908,8 @@ describe("local project storage", () => {
 
     const renamed = projects.rename(migrated.id, "Juniper Kitchen House", migrated.revision);
     expect(renamed.revision).toBe(15);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
-    expect(ProjectCollectionV10Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
+    expect(ProjectCollectionV12Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
   });
 
   it("round-trips valid Real Estate template data through v7 project mutations", () => {
@@ -830,8 +937,8 @@ describe("local project storage", () => {
     };
     const saved = projects.save(created.id, projectSnapshotFromPage(brief, page, "split", created.siteSettings, created.heroImage, editedTemplate), created.revision);
     expect(siteTemplateFromProject(projects.load(saved.id))).toEqual(editedTemplate);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
-    expect(ProjectCollectionV10Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
+    expect(ProjectCollectionV12Schema.safeParse(JSON.parse(storage.value ?? "{}")).success).toBe(true);
   });
 
   it("does not rewrite a v6 collection containing a template variant unsupported by v6", () => {
@@ -877,7 +984,7 @@ describe("local project storage", () => {
     const saved = projects.save(created.id, projectSnapshotFromPage(brief, page, "split", created.siteSettings, created.heroImage, restaurantTemplate), created.revision);
     const renamed = projects.rename(saved.id, "Juniper Kitchen House", saved.revision);
     expect(siteTemplateFromProject(renamed)).toEqual(restaurantTemplate);
-    expect(JSON.parse(storage.value ?? "{}").version).toBe(10);
+    expect(JSON.parse(storage.value ?? "{}").version).toBe(12);
     expect(JSON.parse(storage.value ?? "{}").projects[0].pages[0].template).toEqual(restaurantTemplate);
   });
 
@@ -899,7 +1006,7 @@ describe("local project storage", () => {
 
   it("never rewrites malformed or unsupported future collection versions", () => {
     const { storage, projects } = setup();
-    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 11, projects: [] }]) {
+    for (const value of [{ version: 1, projects: [{ id: "bad" }] }, { version: 13, projects: [] }]) {
       storage.value = JSON.stringify(value);
       const before = storage.value;
       const writes = storage.writes;

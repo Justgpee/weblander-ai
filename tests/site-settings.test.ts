@@ -55,7 +55,9 @@ describe("appearance settings", () => {
       { type: "none", unexpected: true },
     ]) expect(SiteNavigationTargetSchema.safeParse(target).success).toBe(false);
 
-    const legacy = { ...DEFAULT_SITE_SETTINGS, navigation: DEFAULT_SITE_SETTINGS.navigation.map(({ label, destination }) => ({ label, destination })) };
+    const { branding: _branding, ...legacyDefaults } = DEFAULT_SITE_SETTINGS;
+    void _branding;
+    const legacy = { ...legacyDefaults, navigation: DEFAULT_SITE_SETTINGS.navigation.map(({ label, destination }) => ({ label, destination })) };
     expect(SiteSettingsV9Schema.safeParse(legacy).success).toBe(true);
     expect(SiteSettingsV9Schema.safeParse({ ...legacy, navigation: legacy.navigation.map((entry) => ({ ...entry, target: { type: "none" } })) }).success).toBe(false);
     const current = { ...legacy, navigation: legacy.navigation.map((entry) => ({ ...entry, target: { type: "none" as const } })) };

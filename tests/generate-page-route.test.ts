@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockGenerateSitePage } = vi.hoisted(() => ({ mockGenerateSitePage: vi.fn() }));
 vi.mock("@/lib/ai/generate-site-page", () => ({ generateSitePage: mockGenerateSitePage }));
@@ -23,10 +23,11 @@ const generatedPage = {
   },
   template: { id: "generic" },
 };
-const jsonRequest = (body: string) => new Request("http://localhost/api/generate-page", { method: "POST", headers: { "content-type": "application/json" }, body });
+const jsonRequest = (body: string, extraHeaders: Record<string, string> = {}) => new Request("http://localhost/api/generate-page", { method: "POST", headers: { "content-type": "application/json", ...extraHeaders }, body });
 
 describe("POST /api/generate-page", () => {
   beforeEach(() => mockGenerateSitePage.mockReset());
+  afterEach(() => vi.unstubAllEnvs());
 
   it("validates page-scoped requests and returns one validated page record", async () => {
     const mismatchedRequest = {
@@ -44,7 +45,46 @@ describe("POST /api/generate-page", () => {
     const response = await POST(jsonRequest(JSON.stringify(requestData)));
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.has("x-generation-vercel-id")).toBe(false);
     expect(await response.json()).toEqual({ data: generatedPage });
+    expect(mockGenerateSitePage).toHaveBeenCalledWith(requestData);
+  });
+
+  it("propagates a validated Vercel request ID and returns it on success and handled errors", async () => {
+    vi.stubEnv("VERCEL", "1");
+    const vercelId = "sfo1::iad1::abc123";
+    mockGenerateSitePage.mockResolvedValueOnce(generatedPage);
+    const success = await POST(jsonRequest(JSON.stringify(requestData), { "x-vercel-id": vercelId }));
+    expect(success.status).toBe(200);
+    expect(success.headers.get("x-generation-vercel-id")).toBe(vercelId);
+    expect(mockGenerateSitePage).toHaveBeenCalledWith(requestData, undefined, { vercelRequestId: vercelId });
+
+    mockGenerateSitePage.mockRejectedValueOnce(new Error("private provider response sk-secret"));
+    const failed = await POST(jsonRequest(JSON.stringify(requestData), { "x-vercel-id": vercelId }));
+    expect(failed.status).toBe(502);
+    expect(failed.headers.get("x-generation-vercel-id")).toBe(vercelId);
+    const body = await failed.text();
+    expect(body).not.toMatch(/private provider response|sk-secret/);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", "client-controlled identifier"],
+    ["excessively long", `sfo1::${"a".repeat(300)}`],
+  ])("continues with existing correlation behavior for %s Vercel IDs", async (_label, id) => {
+    vi.stubEnv("VERCEL", "1");
+    mockGenerateSitePage.mockResolvedValue(generatedPage);
+    const response = await POST(jsonRequest(JSON.stringify(requestData), id ? { "x-vercel-id": id } : {}));
+    expect(response.status).toBe(200);
+    expect(response.headers.has("x-generation-vercel-id")).toBe(false);
+    expect(mockGenerateSitePage).toHaveBeenCalledWith(requestData);
+  });
+
+  it("ignores a client-supplied x-vercel-id outside a Vercel deployment", async () => {
+    vi.stubEnv("VERCEL", "");
+    mockGenerateSitePage.mockResolvedValue(generatedPage);
+    const response = await POST(jsonRequest(JSON.stringify(requestData), { "x-vercel-id": "sfo1::iad1::abc123" }));
+    expect(response.headers.has("x-generation-vercel-id")).toBe(false);
     expect(mockGenerateSitePage).toHaveBeenCalledWith(requestData);
   });
 

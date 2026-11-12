@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SITE_TEMPLATE, type SiteTemplate } from "@/lib/site-templates";
+import { DEFAULT_SITE_SETTINGS } from "@/lib/site-settings";
 import {
   CUSTOM_SITE_DESTINATION,
   NO_SITE_DESTINATION,
@@ -150,6 +151,7 @@ describe("template-aware navigation destination options", () => {
     const home = { id: "home", template: restaurant };
     const contact = { id: "contact", template: restaurant };
     const settings = normalizeSiteNavigationTargets({
+      ...DEFAULT_SITE_SETTINGS,
       navigation: [
         { label: "Menu", destination: "#site-menu", target: { type: "section", pageId: "home", anchor: "#site-menu" } },
         { label: "Contact", destination: "", target: { type: "page", pageId: "contact" } },

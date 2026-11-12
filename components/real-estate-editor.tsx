@@ -8,9 +8,11 @@ type RealEstateEditorProps = {
   pageId: string;
   content: RealEstateContent;
   onChange: (content: RealEstateContent | null) => void;
+  regeneration: { loading: boolean; error: string; disabled?: boolean };
+  onRegenerate: () => void;
 };
 
-export function RealEstateEditor({ pageId, content, onChange }: RealEstateEditorProps) {
+export function RealEstateEditor({ pageId, content, onChange, regeneration, onRegenerate }: RealEstateEditorProps) {
   const [draft, setDraft] = useState<RealEstateContentDraft>(() => realEstateContentToDraft(content));
   const validation = validateRealEstateContentDraft(draft);
   const idPrefix = `${pageId}-real-estate`;
@@ -41,7 +43,9 @@ export function RealEstateEditor({ pageId, content, onChange }: RealEstateEditor
         <div className="restaurant-editor-heading">
           <div><strong>Featured property highlights</strong><span>Use descriptive concepts grounded in your brief; these are not verified active listings.</span></div>
           <button type="button" onClick={() => update({ ...draft, featuredProperties: [...draft.featuredProperties, { name: "", description: "" }] })} disabled={draft.featuredProperties.length >= 4}>Add highlight</button>
+          <button type="button" onClick={onRegenerate} disabled={regeneration.loading || regeneration.disabled} aria-busy={regeneration.loading}>{regeneration.loading ? "Regenerating featured properties…" : "Regenerate featured properties"}</button>
         </div>
+        {regeneration.error && <p role="alert" className="restaurant-editor-error">{regeneration.error}</p>}
         <div className="restaurant-editor-menu">
           {draft.featuredProperties.map((property, index) => {
             const nameError = fieldError(`Featured property ${index + 1} name`);

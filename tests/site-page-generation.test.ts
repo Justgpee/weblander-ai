@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateSitePage } from "@/lib/ai/generate-site-page";
 import { GenerationError } from "@/lib/ai/errors";
 import { SitePageGenerationRequestSchema, type SitePageGenerationRequest } from "@/lib/site-page-generation";
@@ -26,6 +26,8 @@ const validOutput = {
   features: ["Seasonal ingredients prepared with care", "A welcoming table for local diners"],
   callToAction: "Discover our story",
 };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("site page generation request schema", () => {
   it("accepts page identities and preserves template content", () => {
@@ -98,5 +100,44 @@ describe("generateSitePage", () => {
       .rejects.toMatchObject({ code: "PROVIDER", message: expect.not.stringContaining("private provider detail") });
     await expect(generateSitePage(baseRequest, async () => { throw new GenerationError("REFUSED", "safe refusal"); }))
       .rejects.toMatchObject({ code: "REFUSED" });
+  });
+
+  it("uses one opaque diagnostic correlation ID across provider and local schema validation", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    let receivedCorrelationId: string | undefined;
+    let receivedVercelRequestId: string | undefined;
+
+    await expect(generateSitePage(baseRequest, async (_request, context) => {
+      receivedCorrelationId = context?.correlationId;
+      receivedVercelRequestId = context?.vercelRequestId;
+      return { ...validOutput, features: ["too short", "tiny"] };
+    }, { vercelRequestId: "sfo1::iad1::abc123" })).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
+
+    expect(receivedCorrelationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(receivedVercelRequestId).toBe("sfo1::iad1::abc123");
+    expect(log).toHaveBeenCalledWith("AI generation diagnostic", expect.objectContaining({
+      correlationId: receivedCorrelationId,
+      vercelRequestId: receivedVercelRequestId,
+      operation: "page-generation",
+      failureKind: "schema-validation",
+      validationStage: "project-page-content",
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/Northline|Juniper Kitchen|Seasonal ingredients|local diners/);
+  });
+
+  it("carries both correlation IDs into provider failure diagnostics", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    let receivedCorrelationId: string | undefined;
+    await expect(generateSitePage(baseRequest, async (_request, context) => {
+      receivedCorrelationId = context?.correlationId;
+      throw Object.assign(new Error("private prompt and provider response"), { name: "APIError", status: 503 });
+    }, { vercelRequestId: "sfo1::iad1::abc123" })).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: receivedCorrelationId,
+      vercelRequestId: "sfo1::iad1::abc123",
+      failureKind: "provider-server",
+      httpStatus: 503,
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private prompt|provider response/);
   });
 });

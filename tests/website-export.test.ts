@@ -66,7 +66,9 @@ describe("standalone website export", () => {
     expect(GENERATED_SITE_CSS).toContain("@container site (min-width:701px) and (max-width:900px)");
     expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px)");
     expect(GENERATED_SITE_CSS).toContain("@container site (max-width:420px)");
-    expect(GENERATED_SITE_CSS).not.toContain(".site-mock.preview");
+    expect(GENERATED_SITE_CSS).toContain("@container site (min-width:480px) and (max-width:700px)");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.preview.split .site-hero{grid-template-columns:minmax(0,.88fr) minmax(0,1.12fr)");
+    expect(GENERATED_SITE_CSS).toContain(".site-mock.preview.editorial .site-copy{grid-row:2");
 
     for (const layout of ["editorial", "split"] as const) {
       for (const style of VISUAL_STYLES) {
@@ -77,6 +79,32 @@ describe("standalone website export", () => {
         expect(exported).toContain(`class="site-mock ${style.toLowerCase()} ${layout}"`);
         expect(exported).toContain(`<style>${GENERATED_SITE_CSS}</style>`);
       }
+    }
+  });
+
+  it("gives Studio layouts different compositions for all four templates while leaving export breakpoints untouched", () => {
+    const templates: SiteTemplate[] = [
+      { id: "generic" },
+      restaurantTemplate,
+      fashionTemplate,
+      realEstateTemplate,
+    ];
+
+    for (const template of templates) {
+      const editorialPreview = renderGeneratedWebsite({ ...page, layout: "editorial" }, DEFAULT_SITE_SETTINGS, null, template);
+      const splitPreview = renderGeneratedWebsite({ ...page, layout: "split" }, DEFAULT_SITE_SETTINGS, null, template);
+      const editorialExport = createWebsiteExport({ ...page, layout: "editorial" }, "editorial", DEFAULT_SITE_SETTINGS, null, template).html;
+      const splitExport = createWebsiteExport({ ...page, layout: "split" }, "split", DEFAULT_SITE_SETTINGS, null, template).html;
+
+      expect(editorialPreview).toContain(" editorial preview");
+      expect(splitPreview).toContain(" split preview");
+      expect(editorialExport.match(/<div class="([^"]*site-mock[^"]*)"/)?.[1]).not.toContain("preview");
+      expect(splitExport.match(/<div class="([^"]*site-mock[^"]*)"/)?.[1]).not.toContain("preview");
+      expect(GENERATED_SITE_CSS).toContain(".site-mock.preview.editorial .site-copy{grid-row:2");
+      expect(GENERATED_SITE_CSS).toContain(".site-mock.preview.split .site-copy{grid-column:1;grid-row:1}");
+      expect(GENERATED_SITE_CSS).toContain("@container site (max-width:700px){.site-mock{padding-inline:");
+      expect(GENERATED_SITE_CSS).toContain(".site-hero,.site-mock.split .site-hero{grid-template-columns:minmax(0,1fr)");
+      expect(GENERATED_SITE_CSS).toContain("@container site (max-width:479px){.site-mock.preview.editorial .site-hero");
     }
   });
 
@@ -220,6 +248,67 @@ describe("standalone website export", () => {
     expect(html).not.toMatch(/<button\b/i);
   });
 
+  it("renders working typed CTA destinations in standalone HTML and leaves unavailable targets inactive", () => {
+    const externalHtml = createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      ctaDestination: "",
+      ctaTarget: { type: "external", url: "https://example.com/book?source=studio" },
+    }).html;
+    expect(externalHtml).toContain('<a class="site-cta" href="https://example.com/book?source=studio">Book a conversation');
+
+    const sectionHtml = createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      ctaDestination: "",
+      ctaTarget: { type: "current-section", anchor: "#site-headline" },
+    }).html;
+    expect(sectionHtml).toContain('<a class="site-cta" href="#site-headline">Book a conversation');
+    expect(sectionHtml).toContain('<h1 id="site-headline">');
+
+    const typedSamePageSectionHtml = createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      ctaDestination: "",
+      ctaTarget: { type: "section", pageId: "home", anchor: "#site-headline" },
+    }).html;
+    expect(typedSamePageSectionHtml).toContain('<a class="site-cta" href="#site-headline">Book a conversation');
+
+    const crossPageHtml = createWebsiteExport(page, "editorial", {
+      ...DEFAULT_SITE_SETTINGS,
+      ctaDestination: "",
+      ctaTarget: { type: "section", pageId: "about", anchor: "#site-about" },
+    }, null, DEFAULT_SITE_TEMPLATE, {
+      currentPageId: "home",
+      pageKind: "home",
+      pages: [{ id: "home", template: DEFAULT_SITE_TEMPLATE }, { id: "about", template: DEFAULT_SITE_TEMPLATE, kind: "about" }],
+    }).html;
+    expect(crossPageHtml).toContain('<span class="site-cta site-cta-text">Book a conversation</span>');
+    expect(crossPageHtml).not.toContain('<a class="site-cta"');
+
+    const blankHtml = createWebsiteExport(page, "editorial", DEFAULT_SITE_SETTINGS).html;
+    expect(blankHtml).toContain('<span class="site-cta site-cta-text">Book a conversation</span>');
+    expect(blankHtml).not.toContain('<a class="site-cta"');
+  });
+
+  it("renders the logo as a preview link and scopes standalone logo links to included pages", () => {
+    const preview = renderGeneratedWebsite(page, DEFAULT_SITE_SETTINGS, null, DEFAULT_SITE_TEMPLATE, {
+      currentPageId: "about",
+      pageKind: "about",
+      pages: [{ id: "home", template: DEFAULT_SITE_TEMPLATE, kind: "home" }, { id: "about", template: DEFAULT_SITE_TEMPLATE, kind: "about" }],
+    });
+    expect(preview).toContain('<a class="site-logo" href="#top" aria-label="Return to homepage">Northline Studio</a>');
+    expect(GENERATED_SITE_CSS).toContain(".site-logo:focus-visible");
+
+    const homeHtml = createWebsiteExport(page, "editorial").html;
+    expect(homeHtml).toContain('<a class="site-logo" href="#top" aria-label="Return to homepage">Northline Studio</a>');
+
+    const secondaryHtml = createWebsiteExport(page, "editorial", DEFAULT_SITE_SETTINGS, null, DEFAULT_SITE_TEMPLATE, {
+      currentPageId: "about",
+      pageKind: "about",
+      pages: [{ id: "home", template: DEFAULT_SITE_TEMPLATE, kind: "home" }, { id: "about", template: DEFAULT_SITE_TEMPLATE, kind: "about" }],
+    }).html;
+    expect(secondaryHtml).toContain('<span class="site-logo" aria-label="Homepage unavailable">Northline Studio</span>');
+    expect(secondaryHtml).not.toContain('<a class="site-logo"');
+  });
+
   it("uses the same site markup renderer for the preview", () => {
     const previewMarkup = renderGeneratedWebsite(page);
     const { html } = createWebsiteExport(page, "editorial");
@@ -230,6 +319,7 @@ describe("standalone website export", () => {
 
   it("renders configured navigation and CTA destinations as escaped functional links", () => {
     const settings: SiteSettings = {
+      ...DEFAULT_SITE_SETTINGS,
       navigation: [
         { label: "Our <story> & more", destination: "#top" },
         { label: "Collections", destination: "https://example.com/shop?a=1&b=2" },

@@ -17,7 +17,8 @@ vi.mock("openai", () => ({
 vi.mock("openai/helpers/zod", () => ({ zodTextFormat: vi.fn((_schema: unknown, name: string) => ({ name })) }));
 
 import { GenerationError } from "@/lib/ai/errors";
-import { OPENAI_REQUEST_TIMEOUT_MS, requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection, requestGeneratedSitePage } from "@/lib/ai/openai-provider";
+import { OPENAI_REQUEST_TIMEOUT_MS, requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedPageSection, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection, requestGeneratedSitePage } from "@/lib/ai/openai-provider";
+import { SitePageGenerationOutputSchema } from "@/lib/site-page-generation";
 import { OPENAI_IMAGE_MODEL, OPENAI_IMAGE_REQUEST_TIMEOUT_MS, requestGeneratedHeroImage } from "@/lib/ai/openai-image-provider";
 
 const brief = {
@@ -88,6 +89,150 @@ describe("OpenAI provider timeout", () => {
     })).rejects.toMatchObject({ code: "PROVIDER" });
     expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenLastCalledWith("AI provider request failed", expect.objectContaining({ operation: "page-generation" }));
+  });
+
+  it.each([429, 500, 502, 503])("logs HTTP %i distinctly while keeping the client error generic", async (status) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const providerError = Object.assign(new Error("private provider response and request body"), {
+      name: "APIError",
+      status,
+      code: status === 429 ? "rate_limit_exceeded" : "server_error",
+      request_id: "req_page_123",
+      headers: { authorization: "Bearer secret" },
+      response: { body: "private response" },
+    });
+    mocks.parse.mockRejectedValueOnce(providerError);
+
+    await expect(requestGeneratedSitePage({
+      brief,
+      pageType: "about",
+      identity: { id: "about", slug: "about", title: "About" },
+      template: { id: "fashion", content: { collectionHighlights: [
+        { name: "Soft layers", description: "Considered layers for everyday dressing and changing seasons." },
+        { name: "Evening edit", description: "A quiet direction for after-dark dressing and special occasions." },
+      ] } },
+    }, { correlationId: "page-correlation-429", vercelRequestId: "sfo1::iad1::abc123" })).rejects.toMatchObject({
+      code: "PROVIDER",
+      message: "The generation service is temporarily unavailable. Please try again.",
+    });
+
+    expect(log).toHaveBeenCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: "page-correlation-429",
+      vercelRequestId: "sfo1::iad1::abc123",
+      operation: "page-generation",
+      httpStatus: status,
+      failureKind: status === 429 ? "rate-limit" : "provider-server",
+      requestId: "req_page_123",
+      durationMs: expect.any(Number),
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private provider response|request body|Bearer secret|authorization|private response/);
+    log.mockRestore();
+  });
+
+  it("correlates both core and template section provider failures without logging sensitive content", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const context = { correlationId: "section-correlation-1234", vercelRequestId: "sfo1::iad1::section123" };
+    const secretError = Object.assign(new Error("private brief and raw provider body sk-secret"), {
+      name: "APIError", status: 503, code: "server_error", headers: { authorization: "Bearer hidden" },
+    });
+    mocks.parse.mockRejectedValueOnce(secretError);
+    await expect(requestGeneratedSection(brief, "headline", context)).rejects.toMatchObject({
+      code: "PROVIDER", message: "The generation service is temporarily unavailable. Please try again.",
+    });
+    expect(log).toHaveBeenCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: context.correlationId, vercelRequestId: context.vercelRequestId,
+      operation: "section-regeneration", failureKind: "provider-server", httpStatus: 503,
+    }));
+
+    log.mockClear();
+    mocks.parse.mockRejectedValueOnce(secretError);
+    await expect(requestGeneratedPageSection({
+      projectId: null, brief,
+      page: { id: "about", slug: "about", title: "About", kind: "about", template: { id: "generic" } },
+      section: "features",
+    }, "features", context)).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: context.correlationId, vercelRequestId: context.vercelRequestId,
+      operation: "section-regeneration", failureKind: "provider-server", httpStatus: 503,
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private brief|raw provider body|sk-secret|Bearer hidden|authorization/);
+    log.mockRestore();
+  });
+
+  it("logs SDK timeout and connection failures as different safe categories", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const request = {
+      brief,
+      pageType: "about" as const,
+      identity: { id: "about", slug: "about", title: "About" },
+      template: { id: "generic" as const },
+    };
+    mocks.parse.mockRejectedValueOnce(Object.assign(new Error("private timeout"), { name: "APIConnectionTimeoutError" }));
+    await expect(requestGeneratedSitePage(request, { correlationId: "page-timeout-001" })).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenLastCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: "page-timeout-001", category: "timeout", failureKind: "timeout",
+    }));
+
+    log.mockClear();
+    mocks.parse.mockRejectedValueOnce(Object.assign(new Error("private connection failure"), {
+      name: "APIConnectionError",
+      cause: Object.assign(new Error("private nested network failure"), { code: "ECONNRESET" }),
+    }));
+    await expect(requestGeneratedSitePage(request, { correlationId: "page-connection-01" })).rejects.toMatchObject({ code: "PROVIDER" });
+    expect(log).toHaveBeenLastCalledWith("AI provider request failed", expect.objectContaining({
+      correlationId: "page-connection-01", category: "connection", failureKind: "connection", networkCode: "ECONNRESET",
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private timeout|private connection|nested network failure/);
+    log.mockRestore();
+  });
+
+  it("logs incomplete and schema-invalid page output without its contents", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const request = {
+      brief,
+      pageType: "about" as const,
+      identity: { id: "about", slug: "about", title: "About" },
+      template: { id: "generic" as const },
+    };
+    mocks.parse.mockResolvedValueOnce({ status: "incomplete", output: [], output_parsed: null });
+    await expect(requestGeneratedSitePage(request, { correlationId: "page-incomplete-1" })).rejects.toMatchObject({ code: "INCOMPLETE" });
+    expect(log).toHaveBeenLastCalledWith("AI generation diagnostic", expect.objectContaining({
+      correlationId: "page-incomplete-1", failureKind: "incomplete-output", validationStage: "provider-response",
+    }));
+
+    log.mockClear();
+    mocks.parse.mockResolvedValueOnce({ status: "completed", output: [], output_parsed: { headline: "private generated headline" } });
+    await expect(requestGeneratedSitePage(request, { correlationId: "page-invalid-001" })).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
+    expect(log).toHaveBeenLastCalledWith("AI generation diagnostic", expect.objectContaining({
+      correlationId: "page-invalid-001", failureKind: "schema-validation", validationStage: "provider-response",
+      validationIssueCount: expect.any(Number),
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private generated headline");
+    log.mockRestore();
+  });
+
+  it("classifies a Zod error thrown by the structured-output parser as schema validation", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const request = {
+      brief,
+      pageType: "about" as const,
+      identity: { id: "about", slug: "about", title: "About" },
+      template: { id: "generic" as const },
+    };
+    const invalid = SitePageGenerationOutputSchema.safeParse({ headline: "private generated content" });
+    expect(invalid.success).toBe(false);
+    if (invalid.success) throw new Error("Expected invalid test fixture");
+    mocks.parse.mockRejectedValueOnce(invalid.error);
+
+    await expect(requestGeneratedSitePage(request, { correlationId: "page-zod-failure-1" })).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
+    expect(log).toHaveBeenCalledWith("AI generation diagnostic", expect.objectContaining({
+      correlationId: "page-zod-failure-1",
+      failureKind: "schema-validation",
+      validationStage: "provider-response",
+      validationIssueCount: expect.any(Number),
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private generated content");
+    log.mockRestore();
   });
 
   it("uses the existing structured-output provider path for restaurant content", async () => {
