@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { BusinessBriefSchema, SectionContentSchemas } from "@/lib/generation";
-import { ProjectIdSchema, ProjectPageIdSchema, ProjectPageSlugSchema, ProjectPageTitleSchema } from "@/lib/projects";
+import { ProjectIdSchema, ProjectPageContentSchema, ProjectPageIdSchema, ProjectPageSlugSchema, ProjectPageTitleSchema } from "@/lib/projects";
 import { SiteTemplateSchema, type SiteTemplate } from "@/lib/site-templates";
 import { hasCanonicalSitePageIdentity, isSitePageKindCompatible, SitePageKindSchema } from "@/lib/site-page-kind";
 import {
@@ -45,6 +45,7 @@ export const PageSectionGenerationRequestSchema = z.object({
     slug: ProjectPageSlugSchema,
     title: ProjectPageTitleSchema,
     kind: SitePageKindSchema,
+    content: ProjectPageContentSchema,
     template: SiteTemplateSchema,
   }).strict().superRefine((page, context) => {
     if (page.kind !== "legacy" && !isSitePageKindCompatible(page.kind, page.template.id)) {

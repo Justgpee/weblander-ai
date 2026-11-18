@@ -1295,6 +1295,7 @@ export default function Home() {
       slug: currentRecord?.slug ?? "index",
       title: currentRecord?.title ?? "Home",
       kind: currentRecord?.kind ?? "home",
+      content: currentRecord?.content ?? { headline: page.headline, description: page.subheadline, features: page.features, callToAction: page.callToAction },
       template: currentRecord?.template ?? siteTemplate,
     };
     const ticket = requestCoordinator.beginSection(section, projectId);
@@ -1362,7 +1363,7 @@ export default function Home() {
       const response = await fetch("/api/regenerate-page-section", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, brief, page: { id: record.id, slug: record.slug, title: record.title, kind: record.kind, template: record.template }, section }),
+        body: JSON.stringify({ projectId, brief, page: { id: record.id, slug: record.slug, title: record.title, kind: record.kind, content: { headline: page?.headline ?? record.content.headline, description: page?.subheadline ?? record.content.description, features: page?.features ?? record.content.features, callToAction: page?.callToAction ?? record.content.callToAction }, template: record.template }, section }),
       });
       const result: unknown = await response.json();
       if (!response.ok || typeof result !== "object" || result === null || !("data" in result)) {

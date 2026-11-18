@@ -10,6 +10,7 @@ const validBody = {
   brief: { businessName: "Juniper Studio", description: "A neighborhood business offering thoughtful and useful services to its community.", audience: "Local customers", offering: "Considered services", callToAction: "Get in touch", style: "Professional" },
   page: {
     id: "about", slug: "about", title: "About", kind: "about",
+    content: { headline: "A thoughtful page headline for Juniper Studio", description: "A considered studio creating useful clothing and thoughtful design for its community.", features: ["Considered pieces for everyday life", "Thoughtful choices for changing seasons"], callToAction: "Explore the studio" },
     template: { id: "fashion", content: { collectionHighlights: [{ name: "Everyday layers", description: "Easy pieces for changing seasons." }, { name: "Evening edit", description: "A considered direction for after dark." }] } },
   },
   section: "collectionHighlights",

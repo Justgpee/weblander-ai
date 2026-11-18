@@ -11,12 +11,18 @@ import {
 import type { EditableSection } from "@/lib/generation";
 
 export type PageSectionProvider = (request: PageSectionGenerationRequest, section: PageRegenerationSection, diagnosticContext?: ProviderDiagnosticContext) => Promise<unknown>;
-export type CorePageSectionProvider = (brief: PageSectionGenerationRequest["brief"], section: EditableSection, diagnosticContext?: ProviderDiagnosticContext) => Promise<unknown>;
+export type CorePageSectionProvider = (brief: PageSectionGenerationRequest["brief"], section: EditableSection, pageContext: PageSectionGenerationRequest["page"], diagnosticContext?: ProviderDiagnosticContext) => Promise<unknown>;
 
 export async function regenerateSitePageSection(
   input: unknown,
   provider: PageSectionProvider = requestGeneratedPageSection,
-  coreProvider: CorePageSectionProvider = (brief, section, context) => regeneratePageSection(brief, section, undefined, context),
+  coreProvider: CorePageSectionProvider = (brief, section, page, context) => regeneratePageSection(brief, section, undefined, context, {
+    kind: page.kind,
+    title: page.title,
+    templateId: page.template.id,
+    content: page.content,
+    ...(page.template.id === "generic" ? {} : { templateContent: page.template.content }),
+  }),
   options?: { vercelRequestId?: string },
 ) {
   const parsed = PageSectionGenerationRequestSchema.safeParse(input);
@@ -32,6 +38,7 @@ export async function regenerateSitePageSection(
     generated = await coreProvider(
       parsed.data.brief,
       section as EditableSection,
+      parsed.data.page,
       diagnosticContext,
     );
   } else {

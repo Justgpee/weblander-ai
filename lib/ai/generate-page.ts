@@ -1,6 +1,7 @@
 import { GeneratedPageSchema, SectionContentSchemas, type BusinessBrief, type EditableSection, type GeneratedPage } from "@/lib/generation";
 import { GenerationError } from "@/lib/ai/errors";
 import type { ProviderDiagnosticContext } from "@/lib/ai/provider-diagnostics";
+import type { FashionContent, RealEstateContent, RestaurantContent } from "@/lib/site-templates";
 import { requestGeneratedContent, requestGeneratedFashionContent, requestGeneratedRealEstateContent, requestGeneratedRestaurantContent, requestGeneratedSection } from "@/lib/ai/openai-provider";
 import {
   FashionContentSchema,
@@ -18,7 +19,14 @@ import {
 } from "@/lib/site-templates";
 
 export type ContentProvider = (brief: BusinessBrief) => Promise<unknown>;
-export type SectionContentProvider = (brief: BusinessBrief, section: EditableSection, diagnosticContext?: ProviderDiagnosticContext) => Promise<unknown>;
+export type PageSectionRegenerationContext = {
+  kind: "home" | "about" | "services" | "products" | "contact" | "legacy";
+  title: string;
+  templateId: "generic" | "restaurant" | "fashion" | "real-estate";
+  content: { headline: string; description: string; features: string[]; callToAction: string };
+  templateContent?: RestaurantContent | FashionContent | RealEstateContent;
+};
+export type SectionContentProvider = (brief: BusinessBrief, section: EditableSection, diagnosticContext?: ProviderDiagnosticContext, pageContext?: PageSectionRegenerationContext) => Promise<unknown>;
 export type RestaurantContentProvider = (brief: BusinessBrief) => Promise<unknown>;
 export type FashionContentProvider = (brief: BusinessBrief) => Promise<unknown>;
 export type RealEstateContentProvider = (brief: BusinessBrief) => Promise<unknown>;
@@ -46,10 +54,11 @@ export async function regeneratePageSection(
   section: EditableSection,
   provider: SectionContentProvider = requestGeneratedSection,
   diagnosticContext?: ProviderDiagnosticContext,
+  pageContext?: PageSectionRegenerationContext,
 ) {
   let content: unknown;
   try {
-    content = await provider(brief, section, diagnosticContext);
+    content = await provider(brief, section, diagnosticContext, pageContext);
   } catch (error) {
     if (error instanceof GenerationError) throw error;
     throw new GenerationError("PROVIDER", "The generation service is temporarily unavailable. Please try again.");

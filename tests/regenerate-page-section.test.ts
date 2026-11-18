@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { regenerateSitePageSection } from "@/lib/ai/generate-site-section";
+import { regenerateSitePageSection, type CorePageSectionProvider } from "@/lib/ai/generate-site-section";
 import type { ProviderDiagnosticContext } from "@/lib/ai/provider-diagnostics";
 import { mergeTemplateSectionIfUnchanged, PageSectionGenerationRequestSchema, PageSectionContentSchemas, type PageRegenerationSection, type PageSectionGenerationRequest } from "@/lib/page-section-generation";
 import { SiteTemplateSchema, type SiteTemplateId } from "@/lib/site-templates";
@@ -26,6 +26,7 @@ function request(template: SiteTemplateId, section: PageRegenerationSection, kin
     page: {
       ...pageIdentity[kind],
       kind,
+      content: { headline: "A thoughtful headline for this business", description: "A clear description of the business and the value it offers to customers.", features: ["Thoughtful support for local customers", "Useful services shaped around community"], callToAction: "Get in touch" },
       template: templateData[template],
     },
     section,
@@ -39,7 +40,7 @@ describe("page-scoped section regeneration", () => {
     ["features", { features: ["Thoughtful support for local customers", "Useful services shaped around community"] }],
     ["callToAction", { callToAction: "Start a conversation" }],
   ] as const)("supports core section %s on Home and secondary pages across templates", async (section, output) => {
-    const coreProvider = vi.fn(async () => output);
+    const coreProvider = vi.fn<CorePageSectionProvider>(async () => output);
     const kindsByTemplate: Record<SiteTemplateId, PageKind[]> = {
       generic: ["home", "about", "services", "products", "contact"],
       restaurant: ["home", "about", "services", "contact"],
@@ -55,6 +56,8 @@ describe("page-scoped section regeneration", () => {
       }
     }
     expect(coreProvider).toHaveBeenCalledTimes(expectedCalls);
+    expect(coreProvider.mock.calls.some((call) => call[2].kind === "about" && call[2].title === "About")).toBe(true);
+    expect(coreProvider.mock.calls.some((call) => call[2].kind === "home" && call[2].title === "Home")).toBe(true);
   });
 
   it.each([
@@ -74,12 +77,16 @@ describe("page-scoped section regeneration", () => {
     }
     expect(provider).toHaveBeenCalledTimes(kinds[template].length);
     expect(provider.mock.calls[0]?.[1]).toBe(section);
+    expect(provider.mock.calls.some(([req]) => req.page.kind === "about")).toBe(true);
   });
 
   it("rejects incompatible template/section pairs and malformed output", async () => {
     expect(PageSectionGenerationRequestSchema.safeParse(request("generic", "menuHighlights")).success).toBe(false);
     expect(PageSectionGenerationRequestSchema.safeParse(request("restaurant", "collectionHighlights")).success).toBe(false);
     expect(PageSectionGenerationRequestSchema.safeParse(request("fashion", "featuredProperties")).success).toBe(false);
+    expect(PageSectionGenerationRequestSchema.safeParse({ ...request("generic", "headline"), page: { ...request("generic", "headline").page, kind: "services" } }).success).toBe(false);
+    expect(PageSectionGenerationRequestSchema.safeParse({ ...request("generic", "headline"), page: { ...request("generic", "headline").page, content: undefined } }).success).toBe(false);
+    expect(PageSectionGenerationRequestSchema.safeParse({ ...request("generic", "headline"), page: { ...request("generic", "headline").page, kind: "legacy", id: "custom", slug: "custom", title: "Our studio" } }).success).toBe(true);
     await expect(regenerateSitePageSection(request("restaurant", "menuHighlights"), async () => ({ menuHighlights: [{ name: "Short", description: "" }] })))
       .rejects.toMatchObject({ code: "INVALID_OUTPUT" });
     expect(PageSectionContentSchemas.features.safeParse({ features: ["short", "tiny"] }).success).toBe(false);
@@ -118,9 +125,10 @@ describe("page-scoped section regeneration", () => {
     expect(templateContext?.correlationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(templateContext?.vercelRequestId).toBe("sfo1::iad1::section123");
 
-    const coreProvider = vi.fn(async (...args: [PageSectionGenerationRequest["brief"], "headline" | "description" | "features" | "callToAction", ProviderDiagnosticContext?]) => {
+    const coreProvider = vi.fn(async (...args: [PageSectionGenerationRequest["brief"], "headline" | "description" | "features" | "callToAction", PageSectionGenerationRequest["page"], ProviderDiagnosticContext?]) => {
       void args[0];
       void args[1];
+      void args[2];
       return { headline: "A considered experience for every customer" };
     });
     await regenerateSitePageSection(
@@ -129,7 +137,7 @@ describe("page-scoped section regeneration", () => {
       coreProvider,
       { vercelRequestId: "not-a-vercel-request-id" },
     );
-    const coreContext = coreProvider.mock.calls[0]?.[2];
+    const coreContext = coreProvider.mock.calls[0]?.[3];
     expect(coreContext?.correlationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(coreContext?.vercelRequestId).toBeUndefined();
   });
